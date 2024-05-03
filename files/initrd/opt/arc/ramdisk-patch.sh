@@ -37,6 +37,7 @@ PLATFORM="$(readModelKey "${MODEL}" "platform")"
 HDDSORT="$(readConfigKey "arc.hddsort" "${USER_CONFIG_FILE}")"
 USBMOUNT="$(readConfigKey "arc.usbmount" "${USER_CONFIG_FILE}")"
 KERNEL="$(readConfigKey "kernel" "${USER_CONFIG_FILE}")"
+RD_COMPRESSED="$(readConfigKey "rd-compressed" "${USER_CONFIG_FILE}")"
 
 # Check if DSM Version changed
 . "${RAMDISK_PATH}/etc/VERSION"
@@ -45,7 +46,6 @@ KERNEL="$(readConfigKey "kernel" "${USER_CONFIG_FILE}")"
 PRODUCTVERDSM="${majorversion}.${minorversion}"
 PRODUCTVER="$(readConfigKey "productver" "${USER_CONFIG_FILE}")"
 KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
-RD_COMPRESSED="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].rd-compressed")"
 # Read new PAT Info from Config
 PAT_URL="$(readConfigKey "arc.paturl" "${USER_CONFIG_FILE}")"
 PAT_HASH="$(readConfigKey "arc.pathash" "${USER_CONFIG_FILE}")"
@@ -69,7 +69,9 @@ fi
 
 # Modify KVER for Epyc7002
 if [ "${PLATFORM}" = "epyc7002" ]; then
-  KVER="${PRODUCTVER}-${KVER}"
+  KVERP="${PRODUCTVER}-${KVER}"
+else
+  KVERP="${KVER}"
 fi
 
 declare -A SYNOINFO
@@ -90,7 +92,13 @@ while IFS=': ' read -r KEY VALUE; do
 done <<<$(readConfigMap "modules" "${USER_CONFIG_FILE}")
 
 # Patches (diff -Naru OLDFILE NEWFILE > xxx.patch)
-while read -r PE; do
+PATCHS=()
+PATCHS+=("ramdisk-etc-rc-*.patch")
+PATCHS+=("ramdisk-init-script-v${KVER:0:1}-*.patch")
+PATCHS+=("ramdisk-post-init-script-*.patch")
+PATCHS+=("ramdisk-disable-root-pwd-*.patch")
+PATCHS+=("ramdisk-disable-disabled-ports-*.patch")
+for PE in ${PATCHS[@]}; do
   RET=1
   echo "Patching with ${PE}" >"${LOG_FILE}"
   for PF in $(ls ${PATCH_PATH}/${PE} 2>/dev/null); do
@@ -103,7 +111,7 @@ while read -r PE; do
     [ ${RET} -eq 0 ] && break
   done
   [ ${RET} -ne 0 ] && exit 1
-done <<<$(readModelArray "${MODEL}" "productvers.[${PRODUCTVER}].patch")
+done
 
 # Patch /etc/synoinfo.conf
 # Add serial number to synoinfo.conf, to help to recovery a installed DSM
@@ -129,12 +137,12 @@ sed -e "/@@@CONFIG-GENERATED@@@/ {" -e "r ${TMP_PATH}/rp.txt" -e 'd' -e '}' -i "
 rm -f "${TMP_PATH}/rp.txt"
 
 # Extract Modules to Ramdisk
-installModules "${PLATFORM}" "${KVER}" "${!MODULES[@]}" || exit 1
+installModules "${PLATFORM}" "${KVERP}" "${!MODULES[@]}" || exit 1
 
 # Copying fake modprobe
 cp -f "${PATCH_PATH}/iosched-trampoline.sh" "${RAMDISK_PATH}/usr/sbin/modprobe"
 # Copying LKM to /usr/lib/modules
-gzip -dc "${LKM_PATH}/rp-${PLATFORM}-${KVER}-${LKM}.ko.gz" >"${RAMDISK_PATH}/usr/lib/modules/rp.ko" 2>"${LOG_FILE}" || exit 1
+gzip -dc "${LKM_PATH}/rp-${PLATFORM}-${KVERP}-${LKM}.ko.gz" >"${RAMDISK_PATH}/usr/lib/modules/rp.ko" 2>"${LOG_FILE}" || exit 1
 
 # Addons
 echo "Create addons.sh" >"${LOG_FILE}"
@@ -158,14 +166,14 @@ for ADDON in "revert" "misc" "eudev" "disks" "localrss" "notify" "updatenotify" 
   if [ "${ADDON}" = "disks" ]; then
     PARAMS="${HDDSORT} ${USBMOUNT}"
   fi
-  installAddon "${ADDON}" "${PLATFORM}" "${KVER}" || exit 1
+  installAddon "${ADDON}" "${PLATFORM}" || exit 1
   echo "/addons/${ADDON}.sh \${1} ${PARAMS}" >>"${RAMDISK_PATH}/addons/addons.sh" 2>>"${LOG_FILE}" || exit 1
 done
 
 # User Addons
 for ADDON in ${!ADDONS[@]}; do
   PARAMS=${ADDONS[${ADDON}]}
-  installAddon "${ADDON}" "${PLATFORM}" "${KVER}" || exit 1
+  installAddon "${ADDON}" "${PLATFORM}" || exit 1
   echo "/addons/${ADDON}.sh \${1} ${PARAMS}" >>"${RAMDISK_PATH}/addons/addons.sh" 2>>"${LOG_FILE}" || exit 1
 done
 

@@ -1,20 +1,24 @@
 # Get Network Config for Loader
 function getnet() {
-  ETHX=$(ls /sys/class/net/ 2>/dev/null | grep eth) || true
+  ETHX="$(ls /sys/class/net/ 2>/dev/null | grep eth)" # real network cards list
   ARCPATCH="$(readConfigKey "arc.patch" "${USER_CONFIG_FILE}")"
   if [ "${ARCPATCH}" = "true" ]; then
     ARCMACNUM=1
     for ETH in ${ETHX}; do
-      ARCMAC="$(readModelKey "${MODEL}" "arc.mac${ARCMACNUM}")"
+      ARCMAC=""
+      ARCMAC="$(readConfigKey "${MODEL}.mac${ARCMACNUM}" "${S_FILE}")"
       [ -n "${ARCMAC}" ] && writeConfigKey "mac.${ETH}" "${ARCMAC}" "${USER_CONFIG_FILE}"
       [ -z "${ARCMAC}" ] && break
       ARCMACNUM=$((${ARCMACNUM} + 1))
-      ARCMAC=""
     done
   elif [ "${ARCPATCH}" = "false" ]; then
+    ETHN=$(ls /sys/class/net/ 2>/dev/null | grep eth | wc -l)
+    MACS=$(generateMacAddress "${MODEL}" ${ETHN})
+    N=1
     for ETH in ${ETHX}; do
-      MACS=$(generateMacAddress "${MODEL}" 1)
+      MAC=$(echo "${MACS}" | cut -d ' ' -f ${N})
       writeConfigKey "mac.${ETH}" "${MAC}" "${USER_CONFIG_FILE}"
+      N=$((${N} + 1))
     done
   elif [ "${ARCPATCH}" = "user" ]; then
     # User Mac
@@ -54,29 +58,31 @@ function getnet() {
 
 # Get Network Config for Loader
 function autogetnet() {
-  ETHX=$(ls /sys/class/net/ 2>/dev/null | grep eth) || true
+  ETHX="$(ls /sys/class/net/ 2>/dev/null | grep eth)" # real network cards list
   ARCPATCH="$(readConfigKey "arc.patch" "${USER_CONFIG_FILE}")"
   if [ "${ARCPATCH}" = "true" ]; then
     ARCMACNUM=1
     for ETH in ${ETHX}; do
-      ARCMAC="$(readModelKey "${MODEL}" "arc.mac${ARCMACNUM}")"
+      ARCMAC=""
+      ARCMAC="$(readConfigKey "${MODEL}.mac${ARCMACNUM}" "${S_FILE}")"
       [ -n "${ARCMAC}" ] && writeConfigKey "mac.${ETH}" "${ARCMAC}" "${USER_CONFIG_FILE}"
       [ -z "${ARCMAC}" ] && break
       ARCMACNUM=$((${ARCMACNUM} + 1))
-      ARCMAC=""
     done
-  elif [ "${ARCPATCH}" = "false" ]; then
+  else
+    ETHN=$(ls /sys/class/net/ 2>/dev/null | grep eth | wc -l)
+    MACS=$(generateMacAddress "${MODEL}" ${ETHN})
+    N=1
     for ETH in ${ETHX}; do
-      MACS=$(generateMacAddress "${MODEL}" 1)
+      MAC=$(echo "${MACS}" | cut -d ' ' -f ${N})
       writeConfigKey "mac.${ETH}" "${MAC}" "${USER_CONFIG_FILE}"
+      N=$((${N} + 1))
     done
   fi
-  writeConfigKey "arc.macsys" "hardware" "${USER_CONFIG_FILE}"
-  MACSYS="$(readConfigKey "arc.macsys" "${USER_CONFIG_FILE}")"
 }
 
 # Get Amount of NIC
-ETHX=$(ls /sys/class/net/ 2>/dev/null | grep eth) || true
+ETHX="$(ls /sys/class/net/ 2>/dev/null | grep eth)" # real network cards list
 # Get actual IP
 for ETH in ${ETHX}; do
   IPCON="$(getIP ${ETH})"

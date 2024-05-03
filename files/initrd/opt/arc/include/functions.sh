@@ -63,7 +63,7 @@ function randomhex() {
 
 ###############################################################################
 # Generate a random letter
-function generateRandomLetter() {
+function genRandomLetter() {
   for i in A B C D E F G H J K L M N P Q R S T V W X Y Z; do
     echo ${i}
   done | sort -R | tail -1
@@ -71,7 +71,7 @@ function generateRandomLetter() {
 
 ###############################################################################
 # Generate a random digit (0-9A-Z)
-function generateRandomValue() {
+function genRandomValue() {
   for i in 0 1 2 3 4 5 6 7 8 9 A B C D E F G H J K L M N P Q R S T V W X Y Z; do
     echo ${i}
   done | sort -R | tail -1
@@ -82,33 +82,37 @@ function generateRandomValue() {
 # 1 - Model
 # Returns serial number
 function generateSerial() {
-  SERIAL="$(readModelArray "${1}" "serial.prefix" | sort -R | tail -1)"
-  SERIAL+=$(readModelKey "${1}" "serial.middle")
-  case "$(readModelKey "${1}" "serial.suffix")" in
+  ID="$(readModelKey "${1}" "id")"
+  PREFIX="$(readConfigArray "${ID}.prefix" "${S_FILE}" | sort -R | tail -1)"
+  MIDDLE="$(readConfigArray "${ID}.middle" "${S_FILE}" | sort -R | tail -1)"
+  SUFFIX="$(readConfigKey "${ID}.suffix" "${S_FILE}")"
+
+  case "${SUFFIX}" in
   numeric)
-    SERIAL+=$(random)
+    SUFFIX="$(random)"
     ;;
   alpha)
-    SERIAL+=$(generateRandomLetter)$(generateRandomValue)$(generateRandomValue)$(generateRandomValue)$(generateRandomValue)$(generateRandomLetter)
+    SUFFIX="$(genRandomLetter)$(genRandomValue)$(genRandomValue)$(genRandomValue)$(genRandomValue)$(genRandomLetter)"
     ;;
   esac
+  SERIAL="${PREFIX:-"0000"}${MIDDLE:-"XXX"}${SUFFIX:-"123456"}"
   echo ${SERIAL}
+  return 0
 }
 
 ###############################################################################
 # Generate a MAC address for a model
 # 1 - Model
-# 2 - number
+# 2 - Amount of MACs to generate
 # Returns serial number
 function generateMacAddress() {
-  PRE="$(readModelArray "${1}" "serial.macpre")"
-  KEY="$((${RANDOM} % 256)) $((${RANDOM} % 256)) $((${RANDOM} % 256))"
-  SUF="$(printf '%02x%02x%02x' ${KEY})"
+  ID="$(readModelKey "${1}" "id")"
+  MACPRE="$(readConfigKey "${ID}.macpre" "${S_FILE}")"
+  MACSUF="$(printf '%02x%02x%02x' $((${RANDOM} % 256)) $((${RANDOM} % 256)) $((${RANDOM} % 256)))"
   NUM=${2:-1}
   MACS=""
   for I in $(seq 1 ${NUM}); do
-    MACKEY="$((0x${PRE:-001132})) $(($((0x${SUF})) + ${I}))"
-    MACS+="$(printf '%06x%06x' ${MACKEY})"
+    MACS+="$(printf '%06x%06x' $((0x${MACPRE:-"001132"})) $(($((0x${MACSUF})) + ${I})))"
     [ ${I} -lt ${NUM} ] && MACS+=" "
   done
   echo "${MACS}"
@@ -286,18 +290,29 @@ function getIP() {
 }
 
 ###############################################################################
-# Find and mount the DSM root filesystem
-# (based on pocopico's TCRP code)
-function findAndMountDSMRoot() {
-  [ $(mount | grep -i "${TMP_PATH}/mdX" | wc -l) -gt 0 ] && return 0
-  dsmrootdisk="$(blkid | grep -i linux_raid_member | grep -E "/dev/.*1:" | head -1 | awk -F ":" '{print $1}')"
-  [ -z "${dsmrootdisk}" ] && return 1
-  [ ! -d "${TMP_PATH}/mdX" ] && mkdir -p "${TMP_PATH}/mdX"
-  [ $(mount | grep -i "${TMP_PATH}/mdX" | wc -l) -eq 0 ] && mount -t ext4 "${dsmrootdisk}" "${TMP_PATH}/mdX"
-  if [ $(mount | grep -i "${TMP_PATH}/mdX" | wc -l) -eq 0 ]; then
-    echo "Failed to mount"
+# get logo of model
+# 1 - model
+function getLogo() {
+  MODEL="${1}"
+  rm -f "${PART3_PATH}/logo.png"
+  STATUS=$(curl -skL -m 10 -w "%{http_code}" "https://www.synology.com/api/products/getPhoto?product=${MODEL/+/%2B}&type=img_s&sort=0" -o "${PART3_PATH}/logo.png")
+  if [ $? -ne 0 -o ${STATUS:-0} -ne 200 -o ! -f "${PART3_PATH}/logo.png" ]; then
+    rm -f "${PART3_PATH}/logo.png"
     return 1
   fi
+  convert -rotate 180 "${PART3_PATH}/logo.png" "${PART3_PATH}/logo.png" 2>/dev/null
+  magick montage "${PART3_PATH}/logo.png" -background 'none' -tile '3x3' -geometry '350x210' "${PART3_PATH}/logo.png" 2>/dev/null
+  convert -rotate 180 "${PART3_PATH}/logo.png" "${PART3_PATH}/logo.png" 2>/dev/null
+  return 0
+}
+
+###############################################################################
+# Find and mount the DSM root filesystem
+function findDSMRoot() {
+  DSMROOTS=""
+  [ -z "${DSMROOTS}" ] && DSMROOTS="$(mdadm --detail --scan 2>/dev/null | grep -E "name=SynologyNAS:0|name=DiskStation:0|name=SynologyNVR:0|name=BeeStation:0" | awk '{print $2}' | uniq)"
+  [ -z "${DSMROOTS}" ] && DSMROOTS="$(lsblk -pno KNAME,PARTN,FSTYPE,FSVER,LABEL | grep -E "sd[a-z]{1,2}1" | grep -w "linux_raid_member" | grep "0.9" | awk '{print $1}')"
+  echo "${DSMROOTS}"
   return 0
 }
 
@@ -382,7 +397,7 @@ function livepatch() {
   fi
   if [ ${FAIL} -eq 1 ]; then
     echo
-    echo -e "\033[1;34mPatching DSM Files failed! Please stay patient for Update.\033[0m" 0 0
+    echo -e "Patching DSM Files failed! Please stay patient for Update." 0 0
     sleep 5
     exit 1
   else

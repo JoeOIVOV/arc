@@ -26,10 +26,6 @@ on:
         description: "clean"
         default: false
         type: boolean
-      br_version:
-        description: "buildroot version"
-        default: "2023.08.x"
-        type: string
       addons_version:
         description: "addons version"
         default: ""
@@ -48,6 +44,10 @@ on:
         type: string
       patches_version:
         description: "patches version"
+        default: ""
+        type: string
+      theme_version:
+        description: "theme version"
         default: ""
         type: string
 
@@ -135,6 +135,9 @@ jobs:
           PATCHESTAG="${{ inputs.patches_version }}"
           getPatches "files/p3/patches"
           echo "PATCHESTAG=${TAG}" >> $GITHUB_ENV
+          THEMETAG="${{ inputs.theme_version }}"
+          getTheme "files/p1/boot/grub"
+          echo "THEMETAG=${TAG}" >> $GITHUB_ENV
 
           echo "OK"
 
@@ -158,8 +161,7 @@ jobs:
           sudo mount ${LOOPX}p3 "/tmp/p3"
 
           echo "Get Buildroot"
-          br_version="${{ inputs.br_version }}"
-          [ -z "${br_version}" ] && br_version="2023.02.x"
+          br_version="2023.08.x"
           getBuildroot "${br_version}" "br"
           [ ! -f "br/bzImage-arc" ] || [ ! -f "br/initrd-arc" ] && return 1
           
@@ -180,28 +182,19 @@ jobs:
 
           sudo losetup --detach ${LOOPX}
 
-          # echo "Create Arc_4GB Image"
-          # resizeImg "arc.img" "+3072M" "arc_4GB.img"
-
           echo "Image Converter"
           qemu-img convert -O vmdk arc.img arc-dyn.vmdk
           qemu-img convert -O vmdk -o adapter_type=lsilogic arc.img -o subformat=monolithicFlat arc.vmdk
-          # qemu-img convert -O vmdk arc_4GB.img arc_4GB-dyn.vmdk
-          # qemu-img convert -O vmdk -o adapter_type=lsilogic arc_4GB.img -o subformat=monolithicFlat arc_4GB.vmdk
 
       # Zip image and generate checksum
       - name: Pack
         run: |
           if [ -n "${{ env.VERSION }}" ]; then
             zip -9 "arc-${{ env.VERSION }}.img.zip" arc.img
-            # zip -9 "arc_4GB-${{ env.VERSION }}.img.zip" arc_4GB.img
             zip -9 "arc-${{ env.VERSION }}.vmdk-dyn.zip" arc-dyn.vmdk
-            # zip -9 "arc_4GB-${{ env.VERSION }}.vmdk-dyn.zip" arc_4GB-dyn.vmdk
             zip -9 "arc-${{ env.VERSION }}.vmdk-flat.zip" arc.vmdk arc-flat.vmdk
-            # zip -9 "arc_4GB-${{ env.VERSION }}.vmdk-flat.zip" arc_4GB.vmdk arc-flat.vmdk
           else
             zip -9 "arc.img.zip" arc.img
-            # zip -9 "arc_4GB.img.zip" arc_4GB.img
           fi
           zip -9j update.zip "files/p3/bzImage-arc" "files/p3/initrd-arc" "files/p1/ARC-VERSION" "files/p1/boot/grub/grub.cfg"
 
@@ -213,7 +206,6 @@ jobs:
           name: Images
           path: |
             arc.img.zip
-            # arc_4GB.img.zip
             update.zip
           retention-days: 5
 
@@ -226,23 +218,20 @@ jobs:
           prerelease: ${{ inputs.prerelease }}
           allowUpdates: true
           body: |
-            Notice:
-              ${{ inputs.notice }}
+            ### Notice: ${{ inputs.notice }}
 
             Buildroot: ${{ inputs.br_version }}
             Addons: ${{ env.ADDONSTAG }}
             Configs: ${{ env.CONFIGSTAG }}
             Modules: ${{ env.MODULESTAG }}
             Patches: ${{ env.PATCHESTAG }}
+            Theme: ${{ env.THEMETAG }}
             LKM: ${{ env.LKMTAG }}
 
             Changelog:
               ${{ steps.Changelog.outputs.changelog }}
           artifacts: |
             arc-${{ env.VERSION }}.img.zip
-            # arc_4GB-${{ env.VERSION }}.img.zip
             arc-${{ env.VERSION }}.vmdk-dyn.zip
-            # arc_4GB-${{ env.VERSION }}.vmdk-dyn.zip
             arc-${{ env.VERSION }}.vmdk-flat.zip
-            # arc_4GB-${{ env.VERSION }}.vmdk-flat.zip
             update.zip

@@ -66,6 +66,8 @@ MACSYS="$(readConfigKey "arc.macsys" "${USER_CONFIG_FILE}")"
 ODP="$(readConfigKey "arc.odp" "${USER_CONFIG_FILE}")"
 HDDSORT="$(readConfigKey "arc.hddsort" "${USER_CONFIG_FILE}")"
 KERNEL="$(readConfigKey "arc.kernel" "${USER_CONFIG_FILE}")"
+RD_COMPRESSED="$(readConfigKey "rd-compressed" "${USER_CONFIG_FILE}")"
+SATADOM="$(readConfigKey "satadom" "${USER_CONFIG_FILE}")"
 USBMOUNT="$(readConfigKey "arc.usbmount" "${USER_CONFIG_FILE}")"
 ARCIPV6="$(readConfigKey "arc.ipv6" "${USER_CONFIG_FILE}")"
 EMMCBOOT="$(readConfigKey "arc.emmcboot" "${USER_CONFIG_FILE}")"
@@ -125,49 +127,59 @@ function arcModel() {
     --infobox "Reading Models" 3 20
     echo -n "" >"${TMP_PATH}/modellist"
     while read -r M; do
+      [ "${M}" = "serials" ] && continue
       Y="$(readModelKey "${M}" "disks")"
       echo "${M} ${Y}" >>"${TMP_PATH}/modellist"
     done <<<$(find "${MODEL_CONFIG_PATH}" -maxdepth 1 -name \*.yml | sed 's/.*\///; s/\.yml//')
     while true; do
       echo -n "" >"${TMP_PATH}/menu"
-      while read -r M Y; do
-        PLATFORM=$(readModelKey "${M}" "platform")
-        DT="$(readModelKey "${M}" "dt")"
-        BETA="$(readModelKey "${M}" "beta")"
+      while read -r ID Y; do
+        PLATFORM=$(readModelKey "${ID}" "platform")
+        DT="$(readModelKey "${ID}" "dt")"
+        BETA="$(readModelKey "${ID}" "beta")"
         [[ "${BETA}" = "true" && ${FLGBETA} -eq 0 ]] && continue
         DISKS="${Y}-Bay"
-        ARCCONF="$(readModelKey "${M}" "arc.serial")"
-        [ -n "${ARCCONF}" ] && ARC="x" || ARC=""
-        [[ "${PLATFORM}" = "r1000" || "${PLATFORM}" = "v1000" || "${PLATFORM}" = "epyc7002" ]] && CPU="AMD" || CPU="Intel"
-        [[ "${PLATFORM}" = "apollolake" || "${PLATFORM}" = "geminilake" || "${PLATFORM}" = "epyc7002" ]] && IGPUS="x" || IGPUS=""
-        [[ "${DT}" = "false" || "${PLATFORM}" = "epyc7002" ]] && HBAS="x" || HBAS=""
-        [ "${DT}" = "false" ] && USBS="x" || USBS=""
-        [[ "${M}" = "DS220+" ||  "${M}" = "DS224+" || "${M}" = "DS918+" || "${M}" = "DS1019+" || "${M}" = "DS1621xs+" || "${M}" = "RS1619xs+" ]] && M_2_CACHE="" || M_2_CACHE="x"
-        [ "${DT}" = "true" ] && [ "${M}" != "DS220+" || "${M}" != "DS224+" ] && M_2_STORAGE="x" || M_2_STORAGE=""
+        ARCCONF="$(readConfigKey "${ID}.serial" "${S_FILE}" 2>/dev/null)"
+        ARC=""
+        [ -n "${ARCCONF}" ] && ARC="x"
+        CPU="Intel"
+        [[ "${PLATFORM}" = "r1000" || "${PLATFORM}" = "v1000" || "${PLATFORM}" = "epyc7002" ]] && CPU="AMD"
+        IGPUS=""
+        [[ "${PLATFORM}" = "apollolake" || "${PLATFORM}" = "geminilake" || "${PLATFORM}" = "epyc7002" ]] && IGPUS="x"
+        HBAS="x"
+        [ "${DT}" = "true" ] && HBAS=""
+        [ "${ID}" = "SA6400" ] && HBAS="x"
+        USBS=""
+        [ "${DT}" = "false" ] && USBS="x"
+        M_2_CACHE="x"
+        [[ "${ID}" = "DS220+" ||  "${ID}" = "DS224+" || "${ID}" = "DS918+" || "${ID}" = "DS1019+" || "${ID}" = "DS1621xs+" || "${ID}" = "RS1619xs+" ]] && M_2_CACHE=""
+        M_2_STORAGE="x"
+        [ "${DT}" = "false" ] && M_2_STORAGE=""
+        [[ "${ID}" = "DS220+" || "${ID}" = "DS224+" ]] && M_2_STORAGE=""
         # Check id model is compatible with CPU
         COMPATIBLE=1
         if [ ${RESTRICT} -eq 1 ]; then
-          for F in "$(readModelArray "${M}" "flags")"; do
+          for F in "$(readModelArray "${ID}" "flags")"; do
             if ! grep -q "^flags.*${F}.*" /proc/cpuinfo; then
               COMPATIBLE=0
               break
             fi
           done
-          if [ "${DT}" = "true" ] && [[ ${SCSICONTROLLER} -gt 0 || ${RAIDCONTROLLER} -gt 0 ]]; then
+          if [ "${DT}" = "true" ] && [[ "${EXTERNALCONTROLLER}" = "true" && ! "${ID}" = "SA6400" ]]; then
             COMPATIBLE=0
           fi
-          if [[ ${SATACONTROLLER} -eq 0 && "${EXTERNALCONTROLLER}" = "false" && "${M}" != "SA6400" ]]; then
+          if [[ ${SATACONTROLLER} -eq 0 && "${EXTERNALCONTROLLER}" = "false" && ! "${ID}" = "SA6400" ]]; then
             COMPATIBLE=0
           fi
         fi
         [ "${DT}" = "true" ] && DTS="x" || DTS=""
         [ "${BETA}" = "true" ] && BETA="x" || BETA=""
-        [ ${COMPATIBLE} -eq 1 ] && echo "${M} \"$(printf "\Zb%-8s\Zn \Zb%-8s\Zn \Zb%-15s\Zn \Zb%-5s\Zn \Zb%-5s\Zn \Zb%-5s\Zn \Zb%-10s\Zn \Zb%-5s\Zn \Zb%-10s\Zn \Zb%-12s\Zn \Zb%-4s\Zn" "${DISKS}" "${CPU}" "${PLATFORM}" "${DTS}" "${ARC}" "${IGPUS}" "${USBS}" "${M_2_CACHE}" "${M_2_STORAGE}" "${BETA}")\" ">>"${TMP_PATH}/menu"
+        [ ${COMPATIBLE} -eq 1 ] && echo "${ID} \"$(printf "\Zb%-8s\Zn \Zb%-8s\Zn \Zb%-15s\Zn \Zb%-5s\Zn \Zb%-5s\Zn \Zb%-5s\Zn \Zb%-5s\Zn \Zb%-10s\Zn \Zb%-12s\Zn \Zb%-10s\Zn \Zb%-4s\Zn" "${DISKS}" "${CPU}" "${PLATFORM}" "${DTS}" "${ARC}" "${IGPUS}" "${HBAS}" "${M_2_CACHE}" "${M_2_STORAGE}" "${USBS}" "${BETA}")\" ">>"${TMP_PATH}/menu"
       done <<<$(cat "${TMP_PATH}/modellist" | sort -n -k 2)
       dialog --backtitle "$(backtitle)" --colors \
         --cancel-label "Show all" --help-button --help-label "Exit" \
         --extra-button --extra-label "Info" \
-        --menu "Choose Model for Loader (This Chart indicates the original Values, without Addons.)\n $(printf "\Zb%-10s\Zn \Zb%-8s\Zn \Zb%-8s\Zn \Zb%-15s\Zn \Zb%-5s\Zn \Zb%-5s\Zn \Zb%-5s\Zn \Zb%-10s\Zn \Zb%-5s\Zn \Zb%-10s\Zn \Zb%-12s\Zn \Zb%-4s\Zn" "Model" "Disks" "CPU" "Platform" "DT" "Arc" "iGPU" "USB Mount" "HBA" "M.2 Cache" "M.2 Volume" "Beta")" 0 115 0 \
+        --menu "Choose Model for Loader (This Chart indicates the original Values, without Addons.)\n $(printf "\Zb%-10s\Zn \Zb%-8s\Zn \Zb%-8s\Zn \Zb%-15s\Zn \Zb%-5s\Zn \Zb%-5s\Zn \Zb%-5s\Zn \Zb%-5s\Zn \Zb%-10s\Zn \Zb%-12s\Zn \Zb%-10s\Zn \Zb%-4s\Zn" "Model" "Disks" "CPU" "Platform" "DT" "Arc" "iGPU" "HBA" "M.2 Cache" "M.2 Volume" "USB Mount" "Beta")" 0 115 0 \
         --file "${TMP_PATH}/menu" 2>"${TMP_PATH}/resp"
       RET=$?
       case ${RET} in
@@ -212,6 +224,9 @@ function arcModel() {
     writeConfigKey "synoinfo" "{}" "${USER_CONFIG_FILE}"
     writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
     writeConfigKey "addons" "{}" "${USER_CONFIG_FILE}"
+    if [ "${OFFLINE}" = "false" ]; then
+      getLogo "${MODEL}"
+    fi
     CONFDONE="$(readConfigKey "arc.confdone" "${USER_CONFIG_FILE}")"
     BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
     if [[ -f "${ORI_ZIMAGE_FILE}" || -f "${ORI_RDGZ_FILE}" || -f "${MOD_ZIMAGE_FILE}" || -f "${MOD_RDGZ_FILE}" ]]; then
@@ -229,26 +244,27 @@ function arcVersion() {
   MODEL="$(readConfigKey "model" "${USER_CONFIG_FILE}")"
   PLATFORM="$(readModelKey "${MODEL}" "platform")"
   PRODUCTVER="$(readConfigKey "productver" "${USER_CONFIG_FILE}")"
-  if [ "${ARCRECOVERY}" != "true" ]; then
-    # Select Build for DSM
-    ITEMS="$(readConfigEntriesArray "productvers" "${MODEL_CONFIG_PATH}/${MODEL}.yml" | sort -r)"
-    dialog --clear --no-items --nocancel --backtitle "$(backtitle)" \
-      --menu "Choose a Version" 7 30 0 ${ITEMS} 2>"${TMP_PATH}/resp"
-    resp=$(cat ${TMP_PATH}/resp)
-    [ -z "${resp}" ] && return 1
-    if [ "${PRODUCTVER}" != "${resp}" ]; then
-      PRODUCTVER="${resp}"
-      writeConfigKey "productver" "${PRODUCTVER}" "${USER_CONFIG_FILE}"
-      if [[ -f "${ORI_ZIMAGE_FILE}" || -f "${ORI_RDGZ_FILE}" || -f "${MOD_ZIMAGE_FILE}" || -f "${MOD_RDGZ_FILE}" ]]; then
-        # Delete old files
-        rm -f "${ORI_ZIMAGE_FILE}" "${ORI_RDGZ_FILE}" "${MOD_ZIMAGE_FILE}" "${MOD_RDGZ_FILE}"
-      fi
+  # Select Build for DSM
+  ITEMS="$(readConfigEntriesArray "productvers" "${MODEL_CONFIG_PATH}/${MODEL}.yml" | sort -r)"
+  dialog --clear --no-items --nocancel --backtitle "$(backtitle)" \
+    --menu "Choose a Version" 7 30 0 ${ITEMS} 2>"${TMP_PATH}/resp"
+  resp=$(cat ${TMP_PATH}/resp)
+  [ -z "${resp}" ] && return 1
+  if [ "${PRODUCTVER}" != "${resp}" ]; then
+    PRODUCTVER="${resp}"
+    writeConfigKey "productver" "${PRODUCTVER}" "${USER_CONFIG_FILE}"
+    if [[ -f "${ORI_ZIMAGE_FILE}" || -f "${ORI_RDGZ_FILE}" || -f "${MOD_ZIMAGE_FILE}" || -f "${MOD_RDGZ_FILE}" ]]; then
+      # Delete old files
+      rm -f "${ORI_ZIMAGE_FILE}" "${ORI_RDGZ_FILE}" "${MOD_ZIMAGE_FILE}" "${MOD_RDGZ_FILE}"
     fi
   fi
   PRODUCTVER="$(readConfigKey "productver" "${USER_CONFIG_FILE}")"
   KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
+  # Modify KVER for Epyc7002
   if [ "${PLATFORM}" = "epyc7002" ]; then
-    KVER="${PRODUCTVER}-${KVER}"
+    KVERP="${PRODUCTVER}-${KVER}"
+  else
+    KVERP="${KVER}"
   fi
   dialog --backtitle "$(backtitle)" --title "Arc Config" \
     --infobox "Reconfiguring Synoinfo and Modules" 3 40
@@ -256,12 +272,12 @@ function arcVersion() {
   writeConfigKey "synoinfo" "{}" "${USER_CONFIG_FILE}"
   while IFS=': ' read -r KEY VALUE; do
     writeConfigKey "synoinfo.\"${KEY}\"" "${VALUE}" "${USER_CONFIG_FILE}"
-  done <<<$(readModelMap "${MODEL}" "productvers.[${PRODUCTVER}].synoinfo")
+  done <<<$(readModelMap "${MODEL}" "synoinfo")
   # Reset modules
   writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
   while read -r ID DESC; do
     writeConfigKey "modules.\"${ID}\"" "" "${USER_CONFIG_FILE}"
-  done <<<$(getAllModules "${PLATFORM}" "${KVER}")
+  done <<<$(getAllModules "${PLATFORM}" "${KVERP}")
   if [ "${ONLYVERSION}" != "true" ]; then
     arcPatch
   else
@@ -278,8 +294,8 @@ function arcPatch() {
   # Read Model Values
   MODEL="$(readConfigKey "model" "${USER_CONFIG_FILE}")"
   DT="$(readModelKey "${MODEL}" "dt")"
-  ARCCONF="$(readConfigKey "arc.serial" "${MODEL_CONFIG_PATH}/${MODEL}.yml")"
-  if [[ "${ARCRECOVERY}" != "true" && -n "${ARCCONF}" ]]; then
+  ARCCONF="$(readConfigKey "${MODEL}.serial" "${S_FILE}" 2>/dev/null)"
+  if [ -n "${ARCCONF}" ]; then
     dialog --clear --backtitle "$(backtitle)" \
       --nocancel --title "Arc Patch"\
       --menu "Do you want to use Syno Services?" 7 50 0 \
@@ -291,7 +307,7 @@ function arcPatch() {
     [ -z "${resp}" ] && return 1
     if [ ${resp} -eq 1 ]; then
       # Read Arc Patch from File
-      SN="$(readModelKey "${MODEL}" "arc.serial")"
+      SN="$(readConfigKey "${MODEL}.serial" "${S_FILE}")"
       writeConfigKey "arc.patch" "true" "${USER_CONFIG_FILE}"
     elif [ ${resp} -eq 2 ]; then
       # Generate random Serial
@@ -318,7 +334,7 @@ function arcPatch() {
       writeConfigKey "arc.patch" "user" "${USER_CONFIG_FILE}"
     fi
     writeConfigKey "arc.sn" "${SN}" "${USER_CONFIG_FILE}"
-  elif [[ "${ARCRECOVERY}" != "true" && -z "${ARCCONF}" ]]; then
+  elif [ -z "${ARCCONF}" ]; then
     dialog --clear --backtitle "$(backtitle)" \
       --nocancel --title "Non Arc Patch Model" \
       --menu "Please select an Option?" 8 50 0 \
@@ -355,6 +371,7 @@ function arcPatch() {
   fi
   ARCPATCH="$(readConfigKey "arc.patch" "${USER_CONFIG_FILE}")"
   if [ "${ONLYPATCH}" = "true" ]; then
+    autogetnet
     return 0
   else
     arcSettings
@@ -367,12 +384,14 @@ function arcSettings() {
   # Get Network Config for Loader
   dialog --backtitle "$(backtitle)" --colors --title "Network Config" \
     --infobox "Network Config..." 3 30
+  sleep 2
   getnet
   # Select Portmap for Loader
   getmap
   if [[ "${DT}" = "false" && $(lspci -d ::106 | wc -l) -gt 0 ]]; then
     dialog --backtitle "$(backtitle)" --colors --title "Storage Map" \
       --infobox "Storage Map..." 3 30
+    sleep 2
     getmapSelection
   fi
   # Add Arc Addons
@@ -380,9 +399,11 @@ function arcSettings() {
   # Select Addons
   addonSelection
   # Check for DT and HBA/Raid Controller
-  if [[ "${DT}" = "true" && "${EXTERNALCONTROLLER}" = "true" ]]; then
-    dialog --backtitle "$(backtitle)" --title "Arc Warning" \
-      --msgbox "WARN: You use a HBA/Raid Controller and selected a DT Model.\nThis is still an experimental Feature." 0 0
+  if [ ! "${MODEL}" = "SA6400" ]; then
+    if [[ "${DT}" = "true" && "${EXTERNALCONTROLLER}" = "true" ]]; then
+      dialog --backtitle "$(backtitle)" --title "Arc Warning" \
+        --msgbox "WARN: You use a HBA/Raid Controller and selected a DT Model.\nThis is still an experimental Feature." 0 0
+    fi
   fi
   # Check for more then 8 Ethernet Ports
   DEVICENIC="$(readConfigKey "device.nic" "${USER_CONFIG_FILE}")"
@@ -428,6 +449,11 @@ function premake() {
   # Memory: Set mem_max_mb to the amount of installed memory to bypass Limitation
   writeConfigKey "synoinfo.mem_max_mb" "${RAMMAX}" "${USER_CONFIG_FILE}"
   writeConfigKey "synoinfo.mem_min_mb" "${RAMMIN}" "${USER_CONFIG_FILE}"
+  # Optimized Synoinfo
+  writeConfigKey "synoinfo.support_trim" "yes" "${USER_CONFIG_FILE}"
+  writeConfigKey "synoinfo.support_disk_hibernation" "yes" "${USER_CONFIG_FILE}"
+  writeConfigKey "synoinfo.support_btrfs_dedupe" "yes" "${USER_CONFIG_FILE}"
+  writeConfigKey "synoinfo.support_tiny_btrfs_dedupe" "yes" "${USER_CONFIG_FILE}"
   # eMMC Boot Support
   if [ "${EMMCBOOT}" = "true" ]; then
     writeConfigKey "modules.mmc_block" "" "${USER_CONFIG_FILE}"
@@ -455,7 +481,7 @@ function arcSummary() {
     PORTMAP="$(readConfigKey "cmdline.SataPortMap" "${USER_CONFIG_FILE}")"
     DISKMAP="$(readConfigKey "cmdline.DiskIdxMap" "${USER_CONFIG_FILE}")"
   elif [ "${REMAP}" = "remap" ]; then
-    PORTMAP="$(readConfigKey "cmdline.sata_remap" "${USER_CONFIG_FILE}")"
+    PORTREMAP="$(readConfigKey "cmdline.sata_remap" "${USER_CONFIG_FILE}")"
   fi
   DIRECTBOOT="$(readConfigKey "arc.directboot" "${USER_CONFIG_FILE}")"
   USBMOUNT="$(readConfigKey "arc.usbmount" "${USER_CONFIG_FILE}")"
@@ -483,8 +509,9 @@ function arcSummary() {
   SUMMARY+="\n\Z4> Arc Information\Zn"
   SUMMARY+="\n>> Arc Patch: \Zb${ARCPATCH}\Zn"
   SUMMARY+="\n>> MacSys: \Zb${MACSYS}\Zn"
-  [ -n "${PORTMAP}" ] && SUMMARY+="\n>> Portmap: \Zb${PORTMAP}\Zn"
-  [ -n "${DISKMAP}" ] && SUMMARY+="\n>> Diskmap: \Zb${DISKMAP}\Zn"
+  [ -n "${PORTMAP}" ] && SUMMARY+="\n>> SataPortmap: \Zb${PORTMAP}\Zn"
+  [ -n "${DISKMAP}" ] && SUMMARY+="\n>> DiskIdxMap: \Zb${DISKMAP}\Zn"
+  [ -n "${PORTREMAP}" ] && SUMMARY+="\n>> SataRemap: \Zb${PORTREMAP}\Zn"
   [ "${DT}" = "false" ] && SUMMARY+="\n>> Mount USB Drives: \Zb${USBMOUNT}\Zn"
   SUMMARY+="\n>> Sort Drives: \Zb${HDDSORT}\Zn"
   SUMMARY+="\n>> IPv6: \Zb${ARCIPV6}\Zn"
@@ -495,9 +522,9 @@ function arcSummary() {
   SUMMARY+="\n>> Addons: \Zb${ADDONSINFO}\Zn"
   SUMMARY+="\n"
   SUMMARY+="\n\Z4> Device Information\Zn"
-  SUMMARY+="\n>> NIC Count: \Zb${NIC}\Zn"
-  SUMMARY+="\n>> Disks Count: \Zb${DRIVES}\Zn"
-  SUMMARY+="\n>> Disks Count (internal): \Zb${HARDDRIVES}\Zn"
+  SUMMARY+="\n>> NIC: \Zb${NIC}\Zn"
+  SUMMARY+="\n>> Disks (incl. USB): \Zb${DRIVES}\Zn"
+  SUMMARY+="\n>> Disks (internal): \Zb${HARDDRIVES}\Zn"
   SUMMARY+="\n>> External Controller: \Zb${EXTERNALCONTROLLER}\Zn"
   SUMMARY+="\n>> Memory Min/Max MB: \Zb${RAMMIN}/${RAMMAX}\Zn"
   dialog --backtitle "$(backtitle)" --colors --title "Config Summary" \
@@ -523,12 +550,8 @@ function make() {
   MODEL="$(readConfigKey "model" "${USER_CONFIG_FILE}")"
   PLATFORM="$(readModelKey "${MODEL}" "platform")"
   PRODUCTVER="$(readConfigKey "productver" "${USER_CONFIG_FILE}")"
-  KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
   DT="$(readModelKey "${MODEL}" "dt")"
   OFFLINE="$(readConfigKey "arc.offline" "${USER_CONFIG_FILE}")"
-  if [ "${PLATFORM}" = "epyc7002" ]; then
-    KVER="${PRODUCTVER}-${KVER}"
-  fi
   # Cleanup
   if [ -d "${UNTAR_PAT_PATH}" ]; then
     rm -rf "${UNTAR_PAT_PATH}"
@@ -537,7 +560,7 @@ function make() {
   # Check if all addon exists
   while IFS=': ' read -r ADDON PARAM; do
     [ -z "${ADDON}" ] && continue
-    if ! checkAddonExist "${ADDON}" "${PLATFORM}" "${KVER}"; then
+    if ! checkAddonExist "${ADDON}" "${PLATFORM}"; then
       dialog --backtitle "$(backtitle)" --title "Error" --aspect 18 \
         --msgbox "Addon ${ADDON} not found!" 0 0
       return 1
@@ -832,13 +855,14 @@ function arcAutomated() {
   # read model config for dt and aes
   MODEL="$(readConfigKey "model" "${USER_CONFIG_FILE}")"
   DT="$(readModelKey "${MODEL}" "dt")"
-  ARCCONF="$(readModelKey "${M}" "arc.serial")"
+  ARCCONF="$(readConfigKey "${MODEL}.serial" "${S_FILE}" 2>/dev/null)"
+  ARCPATCHPRE="$(readConfigKey "arc.patch" "${USER_CONFIG_FILE}")"
   [ -n "${ARCCONF}" ] && ARCPATCH="true" || ARCPATCH="false"
-  if [ "${ARCPATCH}" = "true" ]; then
+  if [[ "${ARCPATCH}" = "true" && "${ARCPATCHPRE}" = "true" ]]; then
     SN="$(readModelKey "${MODEL}" "arc.serial")"
     writeConfigKey "arc.sn" "${SN}" "${USER_CONFIG_FILE}"
     writeConfigKey "arc.patch" "true" "${USER_CONFIG_FILE}"
-  elif [ "${ARCPATCH}" = "false" ]; then
+  else
     SN="$(generateSerial "${MODEL}")"
     writeConfigKey "arc.sn" "${SN}" "${USER_CONFIG_FILE}"
     writeConfigKey "arc.patch" "false" "${USER_CONFIG_FILE}"
@@ -847,8 +871,11 @@ function arcAutomated() {
   PLATFORM="$(readModelKey "${MODEL}" "platform")"
   PRODUCTVER="$(readConfigKey "productver" "${USER_CONFIG_FILE}")"
   KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
+  # Modify KVER for Epyc7002
   if [ "${PLATFORM}" = "epyc7002" ]; then
-    KVER="${PRODUCTVER}-${KVER}"
+    KVERP="${PRODUCTVER}-${KVER}"
+  else
+    KVERP="${KVER}"
   fi
   writeConfigKey "arc.confdone" "false" "${USER_CONFIG_FILE}"
   writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"
@@ -864,12 +891,12 @@ function arcAutomated() {
   writeConfigKey "synoinfo" "{}" "${USER_CONFIG_FILE}"
   while IFS=': ' read -r KEY VALUE; do
     writeConfigKey "synoinfo.\"${KEY}\"" "${VALUE}" "${USER_CONFIG_FILE}"
-  done <<<$(readModelMap "${MODEL}" "productvers.[${PRODUCTVER}].synoinfo")
+  done <<<$(readModelMap "${MODEL}" "synoinfo")
   # Reset modules
   writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
   while read -r ID DESC; do
     writeConfigKey "modules.\"${ID}\"" "" "${USER_CONFIG_FILE}"
-  done <<<$(getAllModules "${PLATFORM}" "${KVER}")
+  done <<<$(getAllModules "${PLATFORM}" "${KVERP}")
   autoarcSettings
 }
 
@@ -879,12 +906,14 @@ function autoarcSettings() {
   # Get Network Config for Loader
   dialog --backtitle "$(backtitle)" --colors --title "Network Config" \
     --infobox "Network Config..." 3 30
+  sleep 2
   autogetnet
   # Select Portmap for Loader
   getmap
   if [[ "${DT}" = "false" && $(lspci -d ::106 | wc -l) -gt 0 ]]; then
     dialog --backtitle "$(backtitle)" --colors --title "Storage Map" \
       --infobox "Storage Map..." 3 30
+    sleep 2
     autogetmapSelection
   fi
   # Config is done
@@ -900,14 +929,17 @@ function autopremake() {
   MODEL="$(readConfigKey "model" "${USER_CONFIG_FILE}")"
   PLATFORM="$(readModelKey "${MODEL}" "platform")"
   PRODUCTVER="$(readConfigKey "productver" "${USER_CONFIG_FILE}")"
-  KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
   DT="$(readModelKey "${MODEL}" "dt")"
   # Read Config for Arc Settings
-  KVMSUPPORT="$(readConfigKey "arc.kvm" "${USER_CONFIG_FILE}")"
   EMMCBOOT="$(readConfigKey "arc.emmcboot" "${USER_CONFIG_FILE}")"
   # Memory: Set mem_max_mb to the amount of installed memory to bypass Limitation
   writeConfigKey "synoinfo.mem_max_mb" "${RAMMAX}" "${USER_CONFIG_FILE}"
   writeConfigKey "synoinfo.mem_min_mb" "${RAMMIN}" "${USER_CONFIG_FILE}"
+  # Optimized Synoinfo
+  writeConfigKey "synoinfo.support_trim" "yes" "${USER_CONFIG_FILE}"
+  writeConfigKey "synoinfo.support_disk_hibernation" "yes" "${USER_CONFIG_FILE}"
+  writeConfigKey "synoinfo.support_btrfs_dedupe" "yes" "${USER_CONFIG_FILE}"
+  writeConfigKey "synoinfo.support_tiny_btrfs_dedupe" "yes" "${USER_CONFIG_FILE}"
   # eMMC Boot Support
   if [ "${EMMCBOOT}" = "true" ]; then
     writeConfigKey "modules.mmc_block" "" "${USER_CONFIG_FILE}"
@@ -930,9 +962,6 @@ function automake() {
   KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
   DT="$(readModelKey "${MODEL}" "dt")"
   OFFLINE="$(readConfigKey "arc.offline" "${USER_CONFIG_FILE}")"
-  if [ "${PLATFORM}" = "epyc7002" ]; then
-    KVER="${PRODUCTVER}-${KVER}"
-  fi
   # Cleanup
   if [ -d "${UNTAR_PAT_PATH}" ]; then
     rm -rf "${UNTAR_PAT_PATH}"
@@ -941,7 +970,7 @@ function automake() {
   # Check if all addon exists
   while IFS=': ' read -r ADDON PARAM; do
     [ -z "${ADDON}" ] && continue
-    if ! checkAddonExist "${ADDON}" "${PLATFORM}" "${KVER}"; then
+    if ! checkAddonExist "${ADDON}" "${PLATFORM}"; then
       deleteConfigKey "addons.${ADDON}" "${USER_CONFIG_FILE}"
       continue
     fi
@@ -1064,6 +1093,9 @@ function automake() {
     # Build is done
     writeConfigKey "arc.builddone" "true" "${USER_CONFIG_FILE}"
     BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
+    if [ "${CUSTOM}" = "false" ]; then
+      rm -f "${PART3_PATH}/automated"
+    fi
     boot && exit 0
   fi
 }
@@ -1072,7 +1104,11 @@ function automake() {
 ###############################################################################
 # Main loop
 if grep -q "automated_arc" /proc/cmdline; then
-  arcAutomated
+  if [ "${CUSTOM}" = "true" ]; then
+    arcAutomated
+  else
+    automake
+  fi
 else
   [ "${BUILDDONE}" = "true" ] && NEXT="3" || NEXT="1"
   while true; do
@@ -1096,15 +1132,15 @@ else
       fi
       if [ "${ARCOPTS}" = "true" ]; then
         echo "= \"\Z4========== Arc ==========\Zn \" "                                        >>"${TMP_PATH}/menu"
-        echo "b \"Addons \" "                                                                 >>"${TMP_PATH}/menu"
-        echo "d \"Modules \" "                                                                >>"${TMP_PATH}/menu"
+        echo "b \"DSM Addons \" "                                                             >>"${TMP_PATH}/menu"
+        echo "d \"DSM Modules \" "                                                            >>"${TMP_PATH}/menu"
         echo "e \"DSM Version \" "                                                            >>"${TMP_PATH}/menu"
+        echo "N \"DSM Network Mode \" "                                                       >>"${TMP_PATH}/menu"
+        echo "S \"DSM Storage Map \" "                                                        >>"${TMP_PATH}/menu"
+        echo "P \"DSM StoragePanel \" "                                                       >>"${TMP_PATH}/menu"
         echo "p \"Arc Patch Settings \" "                                                     >>"${TMP_PATH}/menu"
-        echo "N \"Change Network Config \" "                                                  >>"${TMP_PATH}/menu"
-        echo "S \"Change Storage Map \" "                                                     >>"${TMP_PATH}/menu"
-        echo "P \"Custom StoragePanel \" "                                                    >>"${TMP_PATH}/menu"
         echo "D \"Loader DHCP/StaticIP \" "                                                   >>"${TMP_PATH}/menu"
-        echo "R \"Automated: \Z4${CUSTOM}\Zn \" "                                             >>"${TMP_PATH}/menu"
+        echo "R \"Automated Mode: \Z4${CUSTOM}\Zn \" "                                        >>"${TMP_PATH}/menu"
       fi
       if [ "${ADVOPTS}" = "true" ]; then
         echo "5 \"\Z1Hide Advanced Options\Zn \" "                                            >>"${TMP_PATH}/menu"
@@ -1113,8 +1149,8 @@ else
       fi
       if [ "${ADVOPTS}" = "true" ]; then
         echo "= \"\Z4======== Advanced =======\Zn \" "                                        >>"${TMP_PATH}/menu"
-        echo "j \"Cmdline \" "                                                                >>"${TMP_PATH}/menu"
-        echo "k \"Synoinfo \" "                                                               >>"${TMP_PATH}/menu"
+        echo "j \"DSM Cmdline \" "                                                            >>"${TMP_PATH}/menu"
+        echo "k \"DSM Synoinfo \" "                                                           >>"${TMP_PATH}/menu"
         echo "l \"Edit User Config \" "                                                       >>"${TMP_PATH}/menu"
         echo "w \"Reset Loader \" "                                                           >>"${TMP_PATH}/menu"
       fi
@@ -1155,6 +1191,8 @@ else
         echo "O \"Official Driver Priority: \Z4${ODP}\Zn \" "                                 >>"${TMP_PATH}/menu"
         echo "E \"eMMC Boot Support: \Z4${EMMCBOOT}\Zn \" "                                   >>"${TMP_PATH}/menu"
         echo "o \"Switch MacSys: \Z4${MACSYS}\Zn \" "                                         >>"${TMP_PATH}/menu"
+        echo "W \"DSM RD Compression: \Z4${RD_COMPRESSED}\Zn \" "                             >>"${TMP_PATH}/menu"
+        echo "X \"DSM Sata DOM: \Z4${SATADOM}\Zn \" "                                         >>"${TMP_PATH}/menu"
         echo "u \"Switch LKM version: \Z4${LKM}\Zn \" "                                       >>"${TMP_PATH}/menu"
       fi
     fi
@@ -1206,8 +1244,8 @@ else
       e) ONLYVERSION="true" && arcVersion; NEXT="e" ;;
       N) networkMenu; NEXT="N" ;;
       S) storageMenu; NEXT="S" ;;
-      p) ONLYPATCH="true" && arcPatch; NEXT="p" ;;
       P) storagepanelMenu; NEXT="P" ;;
+      p) ONLYPATCH="true" && arcPatch; NEXT="p" ;;
       D) staticIPMenu; NEXT="D" ;;
       R) [ "${CUSTOM}" = "false" ] && CUSTOM='true' || CUSTOM='false'
         writeConfigKey "arc.custom" "${CUSTOM}" "${USER_CONFIG_FILE}"
@@ -1262,12 +1300,14 @@ else
         KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
         if [[ -n "${PLATFORM}" && -n "${KVER}" ]]; then
           if [ "${PLATFORM}" = "epyc7002" ]; then
-            KVER="${PRODUCTVER}-${KVER}"
+            KVERP="${PRODUCTVER}-${KVER}"
+          else
+            KVERP="${KVER}"
           fi
           writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
           while read -r ID DESC; do
             writeConfigKey "modules.\"${ID}\"" "" "${USER_CONFIG_FILE}"
-          done <<<$(getAllModules "${PLATFORM}" "${KVER}")
+          done <<<$(getAllModules "${PLATFORM}" "${KVERP}")
         fi
         writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"
         BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
@@ -1328,6 +1368,13 @@ else
         BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
         NEXT="o"
         ;;
+      W) [ "${RD_COMPRESSED}" = "true" ] && RD_COMPRESSED='false' || RD_COMPRESSED='true'
+        writeConfigKey "rd-compressed" "${RD_COMPRESSED}" "${USER_CONFIG_FILE}"
+        writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"
+        BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
+        NEXT="W"
+        ;;
+      X) satadomMenu; NEXT="X" ;;
       u) [ "${LKM}" = "prod" ] && LKM='dev' || LKM='prod'
         writeConfigKey "lkm" "${LKM}" "${USER_CONFIG_FILE}"
         writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"

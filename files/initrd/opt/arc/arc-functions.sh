@@ -3,7 +3,7 @@
 function editUserConfig() {
   while true; do
     dialog --backtitle "$(backtitle)" --title "Edit with caution" \
-      --editbox "${USER_CONFIG_FILE}" 0 0 2>"${TMP_PATH}/userconfig"
+      --ok-label "Save" --editbox "${USER_CONFIG_FILE}" 0 0 2>"${TMP_PATH}/userconfig"
     [ $? -ne 0 ] && return 1
     mv -f "${TMP_PATH}/userconfig" "${USER_CONFIG_FILE}"
     ERRORS=$(yq eval "${USER_CONFIG_FILE}" 2>&1)
@@ -38,10 +38,6 @@ function addonSelection() {
   MODEL="$(readConfigKey "model" "${USER_CONFIG_FILE}")"
   PRODUCTVER="$(readConfigKey "productver" "${USER_CONFIG_FILE}")"
   PLATFORM="$(readModelKey "${MODEL}" "platform")"
-  KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
-  if [ "${PLATFORM}" = "epyc7002" ]; then
-    KVER="${PRODUCTVER}-${KVER}"
-  fi
   # read addons from user config
   unset ADDONS
   declare -A ADDONS
@@ -53,7 +49,7 @@ function addonSelection() {
   while read -r ADDON DESC; do
     arrayExistItem "${ADDON}" "${!ADDONS[@]}" && ACT="on" || ACT="off"
     echo -e "${ADDON} \"${DESC}\" ${ACT}" >>"${TMP_PATH}/opts"
-  done <<<$(availableAddons "${PLATFORM}" "${KVER}")
+  done <<<$(availableAddons "${PLATFORM}")
   dialog --backtitle "$(backtitle)" --title "Loader Addons" --aspect 18 \
     --checklist "Select Loader Addons to include.\nPlease read Wiki before choosing anything.\nSelect with SPACE, Confirm with ENTER!" 0 0 0 \
     --file "${TMP_PATH}/opts" 2>"${TMP_PATH}/resp"
@@ -78,8 +74,11 @@ function modulesMenu() {
   PRODUCTVER="$(readConfigKey "productver" "${USER_CONFIG_FILE}")"
   PLATFORM="$(readModelKey "${MODEL}" "platform")"
   KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
+  # Modify KVER for Epyc7002
   if [ "${PLATFORM}" = "epyc7002" ]; then
-    KVER="${PRODUCTVER}-${KVER}"
+    KVERP="${PRODUCTVER}-${KVER}"
+  else
+    KVERP="${KVER}"
   fi
   dialog --backtitle "$(backtitle)" --title "Modules" --aspect 18 \
     --infobox "Reading modules" 0 0
@@ -95,8 +94,9 @@ function modulesMenu() {
       2 "Select loaded Modules" \
       3 "Select all Modules" \
       4 "Deselect all Modules" \
-      5 "Choose Modules to include" \
+      5 "Choose Modules" \
       6 "Add external module" \
+      7 "Choose Modules to copy to DSM" \
       2>"${TMP_PATH}/resp"
     [ $? -ne 0 ] && break
     case "$(cat ${TMP_PATH}/resp)" in
@@ -113,7 +113,7 @@ function modulesMenu() {
           --infobox "Selecting loaded Modules" 0 0
         KOLIST=""
         for I in $(lsmod | awk -F' ' '{print $1}' | grep -v 'Module'); do
-          KOLIST+="$(getdepends "${PLATFORM}" "${KVER}" "${I}") ${I} "
+          KOLIST+="$(getdepends "${PLATFORM}" "${KVERP}" "${I}") ${I} "
         done
         KOLIST=($(echo ${KOLIST} | tr ' ' '\n' | sort -u))
         unset USERMODULES
@@ -135,7 +135,7 @@ function modulesMenu() {
         while read -r ID DESC; do
           USERMODULES["${ID}"]=""
           writeConfigKey "modules.\"${ID}\"" "" "${USER_CONFIG_FILE}"
-        done <<<$(getAllModules "${PLATFORM}" "${KVER}")
+        done <<<$(getAllModules "${PLATFORM}" "${KVERP}")
         writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"
         BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
         ;;
@@ -153,7 +153,7 @@ function modulesMenu() {
         while read -r ID DESC; do
           arrayExistItem "${ID}" "${!USERMODULES[@]}" && ACT="on" || ACT="off"
           echo "${ID} ${DESC} ${ACT}" >>"${TMP_PATH}/opts"
-        done <<<$(getAllModules "${PLATFORM}" "${KVER}")
+        done <<<$(getAllModules "${PLATFORM}" "${KVERP}")
         dialog --backtitle "$(backtitle)" --title "Modules" --aspect 18 \
           --checklist "Select Modules to include" 0 0 0 \
           --file "${TMP_PATH}/opts" 2>"${TMP_PATH}/resp"
@@ -195,7 +195,7 @@ function modulesMenu() {
         fi
         KONAME=$(basename "$URL")
         if [[ -n "${KONAME}" && "${KONAME##*.}" = "ko" ]]; then
-          addToModules "${PLATFORM}" "${KVER}" "${TMP_UP_PATH}/${USER_FILE}"
+          addToModules "${PLATFORM}" "${KVERP}" "${TMP_UP_PATH}/${USER_FILE}"
           dialog --backtitle "$(backtitle)" --title "Add external Module" --aspect 18 \
             --msgbox "Module ${KONAME} added to ${PLATFORM}-${KVER}" 0 0
           rm -f "${KONAME}"
@@ -203,6 +203,24 @@ function modulesMenu() {
           dialog --backtitle "$(backtitle)" --title "Add external Module" --aspect 18 \
             --msgbox "File format not recognized!" 0 0
         fi
+        writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"
+        BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
+        ;;
+      7)
+        if [ -f ${USER_UP_PATH}/modulelist ]; then
+          cp -f "${USER_UP_PATH}/modulelist" "${TMP_PATH}/modulelist.tmp"
+        else
+          cp -f "${ARC_PATH}/include/modulelist" "${TMP_PATH}/modulelist.tmp"
+        fi
+        while true; do
+          dialog --backtitle "$(backtitle)" --title "Edit with caution" \
+            --editbox "${TMP_PATH}/modulelist.tmp" 0 0 2>"${TMP_PATH}/modulelist.user"
+          [ $? -ne 0 ] && return
+          [ ! -d "${USER_UP_PATH}" ] && mkdir -p "${USER_UP_PATH}"
+          mv -f "${TMP_PATH}/modulelist.user" "${USER_UP_PATH}/modulelist"
+          dos2unix "${USER_UP_PATH}/modulelist"
+          break
+        done
         writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"
         BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
         ;;
@@ -226,7 +244,6 @@ function cmdlineMenu() {
   echo "5 \"PCI/IRQ Fix\""                                      >>"${TMP_PATH}/menu"
   echo "6 \"C-State Fix\""                                      >>"${TMP_PATH}/menu"
   echo "7 \"Show user Cmdline\""                                >>"${TMP_PATH}/menu"
-  echo "8 \"Show Model/Build Cmdline\""                         >>"${TMP_PATH}/menu"
   echo "9 \"Kernelpanic Behavior\""                             >>"${TMP_PATH}/menu"
   # Loop menu
   while true; do
@@ -237,10 +254,12 @@ function cmdlineMenu() {
       1)
         MSG=""
         MSG+="Commonly used Parameter:\n"
-        MSG+=" * \Z4disable_mtrr_trim=\Zn\n    disables kernel trim any uncacheable memory out.\n"
+        MSG+=" * \Z4disable_mtrr_trim=\Zn\n    Disables kernel trim any uncacheable memory out.\n"
         MSG+=" * \Z4intel_idle.max_cstate=1\Zn\n    Set the maximum C-state depth allowed by the intel_idle driver.\n"
-        MSG+=" * \Z4pcie_port_pm=off\Zn\n    Turn off the power management of the PCIe port.\n"
+        MSG+=" * \Z4pcie_port_pm=off\Zn\n    Disable the power management of the PCIe port.\n"
+        MSG+=" * \Z4pci=realloc=off\Zn\n    Disable reallocating PCI bridge resources.\n"
         MSG+=" * \Z4libata.force=noncq\Zn\n    Disable NCQ for all SATA ports.\n"
+        MSG+=" * \Z4acpi=force\Zn\n    Force enables ACPI.\n"
         MSG+=" * \Z4i915.enable_guc=2\Zn\n    Enable the GuC firmware on Intel graphics hardware.(value: 1,2 or 3)\n"
         MSG+=" * \Z4i915.max_vfs=7\Zn\n     Set the maximum number of virtual functions (VFs) that can be created for Intel graphics hardware.\n"
         MSG+="\nEnter the Parameter Name and Value you want to add.\n"
@@ -389,14 +408,6 @@ function cmdlineMenu() {
           --aspect 18 --msgbox "${ITEMS}" 0 0
         ;;
       8)
-        ITEMS=""
-        while IFS=': ' read -r KEY VALUE; do
-          ITEMS+="${KEY}: ${VALUE}\n"
-        done <<<$(readModelMap "${MODEL}" "productvers.[${PRODUCTVER}].cmdline")
-        dialog --backtitle "$(backtitle)" --title "Model/Version cmdline" \
-          --aspect 18 --msgbox "${ITEMS}" 0 0
-        ;;
-      9)
         rm -f "${TMP_PATH}/opts"
         echo "5 \"Reboot after 5 seconds\"" >>"${TMP_PATH}/opts"
         echo "0 \"No reboot\"" >>"${TMP_PATH}/opts"
@@ -428,9 +439,6 @@ function synoinfoMenu() {
   echo "1 \"Add/edit Synoinfo item\""     >"${TMP_PATH}/menu"
   echo "2 \"Delete Synoinfo item(s)\""    >>"${TMP_PATH}/menu"
   echo "3 \"Show Synoinfo entries\""      >>"${TMP_PATH}/menu"
-  echo "4 \"Add optimized Synoinfo\""     >>"${TMP_PATH}/menu"
-  echo "5 \"Thermal Shutdown (DT only)\"" >>"${TMP_PATH}/menu"
-  echo "6 \"Set Maxdisks for DSM\""       >>"${TMP_PATH}/menu"
 
   # menu loop
   while true; do
@@ -507,88 +515,6 @@ function synoinfoMenu() {
         dialog --backtitle "$(backtitle)" --title "Synoinfo entries" \
           --aspect 18 --msgbox "${ITEMS}" 0 0
         ;;
-      4)
-        writeConfigKey "synoinfo.support_oob_ctl" "no" "${USER_CONFIG_FILE}"
-        writeConfigKey "synoinfo.support_trim" "yes" "${USER_CONFIG_FILE}"
-        writeConfigKey "synoinfo.support_disk_hibernation" "yes" "${USER_CONFIG_FILE}"
-        writeConfigKey "synoinfo.support_bde_internal_10g" "no" "${USER_CONFIG_FILE}"
-        writeConfigKey "synoinfo.support_btrfs_dedupe" "yes" "${USER_CONFIG_FILE}"
-        writeConfigKey "synoinfo.support_tiny_btrfs_dedupe" "yes" "${USER_CONFIG_FILE}"
-        dialog --backtitle "$(backtitle)" --title "Optimized Synoinfo entries" \
-          --aspect 18 --msgbox "Optimized Synoinfo is written to Config." 0 0
-        writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"
-        BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
-        ;;
-      5)
-        MODEL="$(readConfigKey "model" "${USER_CONFIG_FILE}")"
-        CONFDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
-        PLATFORM="$(readModelKey "${MODEL}" "platform")"
-        DT="$(readModelKey "${MODEL}" "dt")"
-        if ["${DT}" = "true" ]; then
-          if findAndMountDSMRoot; then
-            if [ -f "${TMP_PATH}/mdX/usr/syno/etc.defaults/scemd.xml" ]; then
-              if [ -f "${TMP_PATH}/mdX/usr/syno/etc.defaults/scemd.xml.bak" ]; then
-                cp -f "${TMP_PATH}/mdX/usr/syno/etc.defaults/scemd.xml.bak" "${TMP_PATH}/mdX/usr/syno/etc.defaults/scemd.xml"
-              fi
-              cp -f "${TMP_PATH}/mdX/usr/syno/etc.defaults/scemd.xml" "${TMP_PATH}/mdX/usr/syno/etc.defaults/scemd.xml.bak"
-              dialog --backtitle "$(backtitle)" --title "Thermal Shutdown" \
-              --inputbox "CPU Temperature: (Default 90 °C)" 0 0 \
-              2>"${TMP_PATH}/resp"
-              RET=$?
-              [ ${RET} -ne 0 ] && break 2
-              CPUTEMP=$(cat "${TMP_PATH}/resp")
-              if [ "${PLATFORM}" = "geminilake" ]; then
-                sed -i 's|<cpu_temperature fan_speed="99%40hz" action="SHUTDOWN">90</cpu_temperature>|<cpu_temperature fan_speed="99%40hz" action="SHUTDOWN">'"${CPUTEMP}"'</cpu_temperature>|g' "${TMP_PATH}/mdX/usr/syno/etc.defaults/scemd.xml"
-              elif [[ "${PLATFORM}" = "r1000" || "${PLATFORM}" = "v1000" || "${PLATFORM}" = "epyc7002" ]]; then
-                sed -i 's|<alert_config threshold="2" period="30" alert_temp="85" shutdown_temp="95" name="cpu"/>|<alert_config threshold="2" period="30" alert_temp="85" shutdown_temp="'"${CPUTEMP}"'" name="cpu"/>|g' "${TMP_PATH}/mdX/usr/syno/etc.defaults/scemd.xml"
-              fi
-              dialog --backtitle "$(backtitle)" --title "Thermal Shutdown" \
-              --inputbox "Disk Temperature: (Default 61 °C)" 0 0 \
-              2>"${TMP_PATH}/resp"
-              RET=$?
-              [ ${RET} -ne 0 ] && break 2
-              DISKTEMP=$(cat "${TMP_PATH}/resp")
-              if [ "${PLATFORM}" = "geminilake" ]; then
-                sed -i 's|<disk_temperature fan_speed="99%40hz" action="SHUTDOWN">61</disk_temperature>|<disk_temperature fan_speed="99%40hz" action="SHUTDOWN">'"${DISKTEMP}"'</disk_temperature>|g' "${TMP_PATH}/mdX/usr/syno/etc.defaults/scemd.xml"
-              elif [[ "${PLATFORM}" = "r1000" || "${PLATFORM}" = "v1000" || "${PLATFORM}" = "epyc7002" ]]; then
-                sed -i 's|<alert_config threshold="2" period="300" alert_temp="58" shutdown_temp="61" name="disk"/>|<alert_config threshold="2" period="300" alert_temp="58" shutdown_temp="'"${DISKTEMP}"'" name="disk"/>|g' "${TMP_PATH}/mdX/usr/syno/etc.defaults/scemd.xml"
-              fi
-              dialog --backtitle "$(backtitle)" --title "Thermal Shutdown" \
-              --inputbox "M.2 Temperature: (Default 70 °C)" 0 0 \
-              2>"${TMP_PATH}/resp"
-              RET=$?
-              [ ${RET} -ne 0 ] && break 2
-              M2TEMP=$(cat "${TMP_PATH}/resp")
-              if [ "${PLATFORM}" = "geminilake" ]; then
-                sed -i 's|<m2_temperature fan_speed="99%40hz" action="SHUTDOWN">70</m2_temperature>|<m2_temperature fan_speed="99%40hz" action="SHUTDOWN">'"${M2TEMP}"'</m2_temperature>|g' "${TMP_PATH}/mdX/usr/syno/etc.defaults/scemd.xml"
-              elif [[ "${PLATFORM}" = "r1000" || "${PLATFORM}" = "v1000" || "${PLATFORM}" = "epyc7002" ]]; then
-                sed -i 's|<alert_config threshold="2" period="30" alert_temp="68" shutdown_temp="71" name="m2"/>|<alert_config threshold="2" period="30" alert_temp="68" shutdown_temp="'"${M2TEMP}"'" name="m2"/>|g' "${TMP_PATH}/mdX/usr/syno/etc.defaults/scemd.xml"
-              fi
-              dialog --backtitle "$(backtitle)" --title "Thermal Shutdown" --aspect 18 \
-                --msgbox "Change Thermal Shutdown Settings successful!\nCPU: ${CPUTEMP}\nDisk: ${DISKTEMP}\nM.2: ${M2TEMP}" 0 0
-            else
-              dialog --backtitle "$(backtitle)" --title "Thermal Shutdown" --aspect 18 \
-                --msgbox "Change Thermal Shutdown Settings not possible!" 0 0
-            fi
-          else
-            dialog --backtitle "$(backtitle)" --title "Thermal Shutdown" --aspect 18 \
-                --msgbox "Unfortunately Arc couldn't mount the DSM Partition!" 0 0
-          fi
-        else
-          dialog --backtitle "$(backtitle)" --title "Thermal Shutdown" --aspect 18 \
-            --msgbox "Please build and install DSM first!" 0 0
-        fi
-        ;;
-      6)
-        dialog --backtitle "$(backtitle)" --title "Set Maxdisks" \
-          --inputbox "Set Maxdisks for DSM!" 0 0 \
-        2>"${TMP_PATH}/input"
-        MAXDISKS=$(cat "${TMP_PATH}/input")
-        [ -z "${MAXDISKS}" ] && return 1
-        writeConfigKey "device.maxdisks" "${MAXDISKS}" "${USER_CONFIG_FILE}"
-        writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"
-        BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
-        ;;
     esac
   done
   return
@@ -626,10 +552,10 @@ function storagepanelMenu() {
   CONFDONE="$(readConfigKey "arc.confdone" "${USER_CONFIG_FILE}")"
   if [ "${CONFDONE}" = "true" ]; then
     dialog --backtitle "$(backtitle)" --title "StoragePanel" \
-      --aspect 18 --msgbox "Enable custom StoragePanel Addon." 0 0
-    ITEMS="$(echo -e "2_Bay \n4_Bay \n8_Bay \n12_Bay \n16_Bay \n24_Bay \n60_Bay \n")"
+      --aspect 18 --msgbox "StoragePanel Addon enabled." 0 0
+    ITEMS="$(echo -e "RACK_2_Bay \nRACK_4_Bay \nRACK_8_Bay \nRACK_12_Bay \nRACK_16_Bay \nRACK_24_Bay \nRACK_60_Bay \nTOWER_1_Bay \nTOWER_2_Bay \nTOWER_4_Bay \nTOWER_6_Bay \nTOWER_8_Bay \nTOWER_12_Bay \n")"
     dialog --backtitle "$(backtitle)" --title "StoragePanel" \
-      --default-item "24_Bay" --no-items --menu "Choose a Disk Panel" 0 0 0 ${ITEMS} \
+      --default-item "RACK_24_Bay" --no-items --menu "Choose a Disk Panel" 0 0 0 ${ITEMS} \
       2>"${TMP_PATH}/resp"
     resp=$(cat ${TMP_PATH}/resp)
     [ -z "${resp}" ] && return 1
@@ -641,7 +567,7 @@ function storagepanelMenu() {
     resp=$(cat ${TMP_PATH}/resp)
     [ -z "${resp}" ] && return 1
     M2PANEL=${resp}
-    STORAGEPANEL="RACK_${STORAGE} ${M2PANEL}"
+    STORAGEPANEL="${STORAGE} ${M2PANEL}"
     writeConfigKey "addons.storagepanel" "${STORAGEPANEL}" "${USER_CONFIG_FILE}"
     writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"
     BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
@@ -655,16 +581,21 @@ function backupMenu() {
   NEXT="1"
   while true; do
     dialog --backtitle "$(backtitle)" --menu "Choose an Option" 0 0 0 \
-      1 "Recover from DSM" \
-      2 "Backup Encryption Key" \
-      3 "Restore Encryption Key" \
+      1 "Restore Config from DSM" \
+      2 "Restore Encryption Key from DSM" \
       2>"${TMP_PATH}/resp"
     [ $? -ne 0 ] && return 1
     case "$(cat ${TMP_PATH}/resp)" in
       1)
-        dialog --backtitle "$(backtitle)" --title "Try to recover DSM" --aspect 18 \
-          --infobox "Trying to recover a DSM installed system" 0 0
-        if findAndMountDSMRoot; then
+        DSMROOTS="$(findDSMRoot)"
+        if [ -z "${DSMROOTS}" ]; then
+          dialog --backtitle "$(backtitle)" --title "Restore Config" \
+            --msgbox "No DSM system partition(md0) found!\nPlease insert all disks before continuing." 0 0
+          return
+        fi
+        mkdir -p "${TMP_PATH}/mdX"
+        for I in ${DSMROOTS}; do
+          mount -t ext4 "${I}" "${TMP_PATH}/mdX"
           MODEL=""
           PRODUCTVER=""
           if [ -f "${TMP_PATH}/mdX/usr/arc/backup/p1/user-config.yml" ]; then
@@ -678,53 +609,91 @@ function backupMenu() {
               TEXT+="\nSerial: ${SN}"
               ARCPATCH="$(readConfigKey "arc.patch" "${USER_CONFIG_FILE}")"
               TEXT+="\nArc Patch: ${ARCPATCH}"
-              dialog --backtitle "$(backtitle)" --title "Try to recover DSM" \
+              dialog --backtitle "$(backtitle)" --title "Restore Config" \
                 --aspect 18 --msgbox "${TEXT}" 0 0
               CONFDONE="$(readConfigKey "arc.confdone" "${USER_CONFIG_FILE}")"
               writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"
               BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
+              break
             fi
           fi
-          dialog --backtitle "$(backtitle)" --title "Try recovery DSM" --aspect 18 \
-            --msgbox "Recovery completed!\nBuild Loader and Boot." 0 0
+        done
+        if [ -f "${USER_CONFIG_FILE}" ]; then
+          dialog --backtitle "$(backtitle)" --title "Restore Config" \
+            --aspect 18 --msgbox "Config restore successful!" 0 0
+          # Ask for Build
+          dialog --clear --backtitle "$(backtitle)" \
+            --menu "Config done -> Build now?" 7 50 0 \
+            1 "Yes - Build Arc Loader now" \
+            2 "No - I want to make changes" \
+          2>"${TMP_PATH}/resp"
+          resp=$(cat ${TMP_PATH}/resp)
+          [ -z "${resp}" ] && return 1
+          if [ ${resp} -eq 1 ]; then
+            premake
+          elif [ ${resp} -eq 2 ]; then
+            dialog --clear --no-items --backtitle "$(backtitle)"
+            return 1
+          fi
         else
-          dialog --backtitle "$(backtitle)" --title "Try recovery DSM" --aspect 18 \
-            --msgbox "Unfortunately Arc couldn't mount the DSM partition!" 0 0
+          dialog --backtitle "$(backtitle)" --title "Restore Config" \
+            --aspect 18 --msgbox "No Config found!" 0 0
         fi
         ;;
       2)
-        dialog --backtitle "$(backtitle)" --title "Backup Encryption Key" --aspect 18 \
-          --infobox "Backup Encryption Key..." 0 0
-        if [ -f "${PART2_PATH}/machine.key" ]; then
-          if findAndMountDSMRoot; then
-            mkdir -p "${TMP_PATH}/mdX/usr/arc/backup/p2"
-            cp -f "${PART2_PATH}/machine.key" "${TMP_PATH}/mdX/usr/arc/backup/p2/machine.key"
-            dialog --backtitle "$(backtitle)" --title "Backup Encryption Key" --aspect 18 \
-              --msgbox "Encryption Key backup successful!" 0 0
-          else
-            dialog --backtitle "$(backtitle)" --title "Backup Encryption Key" --aspect 18 \
-              --msgbox "Unfortunately Arc couldn't mount the DSM Partition for Backup!" 0 0
-          fi
-        else
-          dialog --backtitle "$(backtitle)" --title "Backup Encryption Key" --aspect 18 \
-            --msgbox "No Encryption Key found!" 0 0
+        DSMROOTS="$(findDSMRoot)"
+        if [ -z "${DSMROOTS}" ]; then
+          dialog --backtitle "$(backtitle)" --title "Restore Encryption Key" \
+            --msgbox "No DSM system partition(md0) found!\nPlease insert all disks before continuing." 0 0
+          return
         fi
-        ;;
-      3)
-        dialog --backtitle "$(backtitle)" --title "Restore Encryption Key" --aspect 18 \
-          --infobox "Restore Encryption Key..." 0 0
-        if findAndMountDSMRoot; then
+        mkdir -p "${TMP_PATH}/mdX"
+        for I in ${DSMROOTS}; do
+          mount -t ext4 "${I}" "${TMP_PATH}/mdX"
           if [ -f "${TMP_PATH}/mdX/usr/arc/backup/p2/machine.key" ]; then
             cp -f "${TMP_PATH}/mdX/usr/arc/backup/p2/machine.key" "${PART2_PATH}/machine.key"
             dialog --backtitle "$(backtitle)" --title "Restore Encryption Key" --aspect 18 \
               --msgbox "Encryption Key restore successful!" 0 0
-          else
-            dialog --backtitle "$(backtitle)" --title "Restore Encryption Key" --aspect 18 \
-            --msgbox "No Encryption Key found!" 0 0
+            break
           fi
+        done
+        if [ -f "${PART2_PATH}/machine.key" ]; then
+          dialog --backtitle "$(backtitle)" --title "Restore Encryption Key" --aspect 18 \
+            --msgbox "Encryption Key restore successful!" 0 0
         else
           dialog --backtitle "$(backtitle)" --title "Restore Encryption Key" --aspect 18 \
-              --msgbox "Unfortunately Arc couldn't mount the DSM Partition for Restore!" 0 0
+            --msgbox "No Encryption Key found!" 0 0
+        fi
+        ;;
+      3)
+        BACKUPKEY="false"
+        DSMROOTS="$(findDSMRoot)"
+        if [ -z "${DSMROOTS}" ]; then
+          dialog --backtitle "$(backtitle)" --title "Backup Encrytion Key" \
+            --msgbox "No DSM system partition(md0) found!\nPlease insert all disks before continuing." 0 0
+          return
+        fi
+        (
+          mkdir -p "${TMP_PATH}/mdX"
+          for I in ${DSMROOTS}; do
+            mount -t ext4 "${I}" "${TMP_PATH}/mdX"
+            [ $? -ne 0 ] && continue
+            if [ -f "${PART2_PATH}/machine.key" ]; then
+              cp -f "${PART2_PATH}/machine.key" "${TMP_PATH}/mdX/usr/arc/backup/p2/machine.key"
+              BACKUPKEY="true"
+              sync
+            fi
+            umount "${TMP_PATH}/mdX"
+          done
+          rm -rf "${TMP_PATH}/mdX"
+        ) 2>&1 | dialog --backtitle "$(backtitle)" --title "Backup Encrytion Key" \
+          --progressbox "Backup Encryption Key ..." 20 70
+        if [ "${BACKUPKEY}" = "true" ]; then
+          dialog --backtitle "$(backtitle)" --title "Backup Encrytion Key"  \
+            --msgbox "Encryption Key backup successful!" 0 0
+        else
+          dialog --backtitle "$(backtitle)" --title "Backup Encrytion Key"  \
+            --msgbox "No Encryption Key found!" 0 0
         fi
         ;;
     esac
@@ -743,6 +712,7 @@ function updateMenu() {
       4 "Update Modules" \
       5 "Update Configs" \
       6 "Update LKMs" \
+      7 "Automated Update Mode" \
       2>"${TMP_PATH}/resp"
     [ $? -ne 0 ] && return 1
     case "$(cat ${TMP_PATH}/resp)" in
@@ -937,18 +907,20 @@ function updateMenu() {
           PLATFORM="$(readModelKey "${MODEL}" "platform")"
           KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
           if [ "${PLATFORM}" = "epyc7002" ]; then
-            KVER="${PRODUCTVER}-${KVER}"
+            KVERP="${PRODUCTVER}-${KVER}"
+          else
+            KVERP="${KVER}"
           fi
         fi
         rm -rf "${MODULES_PATH}"
         mkdir -p "${MODULES_PATH}"
         unzip -oq "${TMP_PATH}/modules.zip" -d "${MODULES_PATH}" >/dev/null 2>&1
         # Rebuild modules if model/build is selected
-        if [[ -n "${PLATFORM}" && -n "${KVER}" ]]; then
+        if [[ -n "${PLATFORM}" && -n "${KVERP}" ]]; then
           writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
           while read -r ID DESC; do
             writeConfigKey "modules.${ID}" "" "${USER_CONFIG_FILE}"
-          done <<<$(getAllModules "${PLATFORM}" "${KVER}")
+          done <<<$(getAllModules "${PLATFORM}" "${KVERP}")
         fi
         rm -f "${TMP_PATH}/modules.zip"
         writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"
@@ -1040,6 +1012,11 @@ function updateMenu() {
         dialog --backtitle "$(backtitle)" --title "Update LKMs" --aspect 18 \
           --msgbox "LKMs updated successful! New Version: ${TAG}" 0 0
         ;;
+      7)
+        dialog --backtitle "$(backtitle)" --title "Automated Update" --aspect 18 \
+          --msgbox "Loader will reboot to Automated Update Mode.\nPlease wait until progress is finished!" 0 0
+        rebootTo update
+        ;;
     esac
   done
   return
@@ -1128,6 +1105,7 @@ function sysinfo() {
     IP=""
     STATICIP="$(readConfigKey "static.${ETH}" "${USER_CONFIG_FILE}")"
     DRIVER="$(ls -ld /sys/class/net/${ETH}/device/driver 2>/dev/null | awk -F '/' '{print $NF}')"
+    NETBUS="$(ethtool -i ${ETH} 2>/dev/null | grep bus-info | cut -d' ' -f2)"
     MAC="$(readConfigKey "mac.${ETH}" "${USER_CONFIG_FILE}")"
     MACR="$(cat /sys/class/net/${ETH}/address | sed 's/://g')"
     COUNT=0
@@ -1141,16 +1119,16 @@ function sysinfo() {
       fi
       if [ -n "${IP}" ]; then
         SPEED=$(ethtool ${ETH} 2>/dev/null | grep "Speed:" | awk '{print $2}')
-        TEXT+="\n  ${DRIVER} (${SPEED} | ${MSG}) \ZbIP: ${IP} | Mac: ${MACR} (${MAC})\Zn"
+        TEXT+="\n  ${DRIVER} (${SPEED} | ${MSG}) \ZbIP: ${IP} | Mac: ${MACR} (${MAC}) @ ${NETBUS}\Zn"
         break
       fi
       if [ ${COUNT} -gt 3 ]; then
-        TEXT+="\n  ${DRIVER} \ZbIP: TIMEOUT | MAC: ${MACR} (${MAC})\Zn"
+        TEXT+="\n  ${DRIVER} \ZbIP: TIMEOUT | MAC: ${MACR} (${MAC}) @ ${NETBUS}\Zn"
         break
       fi
       sleep 3
       if ethtool ${ETH} 2>/dev/null | grep 'Link detected' | grep -q 'no'; then
-        TEXT+="\n  ${DRIVER} \ZbIP: NOT CONNECTED | MAC: ${MACR} (${MAC})\Zn"
+        TEXT+="\n  ${DRIVER} \ZbIP: NOT CONNECTED | MAC: ${MACR} (${MAC}) @ ${NETBUS}\Zn"
         break
       fi
       COUNT=$((${COUNT} + 3))
@@ -1356,6 +1334,7 @@ function fullsysinfo() {
     IP=""
     STATICIP="$(readConfigKey "static.${ETH}" "${USER_CONFIG_FILE}")"
     DRIVER="$(ls -ld /sys/class/net/${ETH}/device/driver 2>/dev/null | awk -F '/' '{print $NF}')"
+    NETBUS="$(ethtool -i ${ETH} 2>/dev/null | grep bus-info | cut -d' ' -f2)"
     MAC="$(readConfigKey "mac.${ETH}" "${USER_CONFIG_FILE}")"
     MACR="$(cat /sys/class/net/${ETH}/address | sed 's/://g')"
     COUNT=0
@@ -1369,16 +1348,16 @@ function fullsysinfo() {
       fi
       if [ -n "${IP}" ]; then
         SPEED=$(ethtool ${ETH} 2>/dev/null | grep "Speed:" | awk '{print $2}')
-        TEXT+="\n${DRIVER} (${SPEED} | ${MSG}) IP: ${IP} | Mac: ${MACR} (${MAC})"
+        TEXT+="\n${DRIVER} (${SPEED} | ${MSG}) IP: ${IP} | Mac: ${MACR} (${MAC}) @ ${NETBUS}"
         break
       fi
       if [ ${COUNT} -gt 3 ]; then
-        TEXT+="\n${DRIVER} IP: TIMEOUT | MAC: ${MACR} (${MAC})"
+        TEXT+="\n${DRIVER} IP: TIMEOUT | MAC: ${MACR} (${MAC}) @ ${NETBUS}"
         break
       fi
       sleep 3
       if ethtool ${ETH} 2>/dev/null | grep 'Link detected' | grep -q 'no'; then
-        TEXT+="\n${DRIVER} IP: NOT CONNECTED | MAC: ${MACR} (${MAC})"
+        TEXT+="\n${DRIVER} IP: NOT CONNECTED | MAC: ${MACR} (${MAC}) @ ${NETBUS}"
         break
       fi
       COUNT=$((${COUNT} + 3))
@@ -1670,7 +1649,7 @@ function staticIPMenu() {
     fi
   done
   dialog --backtitle "$(backtitle)" --title "DHCP/StaticIP" \
-  --msgbox "Settings written and enabled.\nThis will be not applied to DSM." 5 50
+    --msgbox "Settings written and enabled.\nThis will be not applied to DSM." 5 50
   return
 }
 
@@ -1681,45 +1660,47 @@ function downgradeMenu() {
   TEXT+="This feature will allow you to downgrade the installation by removing the VERSION file from the first partition of all disks.\n"
   TEXT+="Therefore, please insert all disks before continuing.\n"
   TEXT+="Warning:\nThis operation is irreversible. Please backup important data. Do you want to continue?"
-  dialog --backtitle "$(backtitle)" --title "Allow downgrade installation" \
+  dialog --backtitle "$(backtitle)" --title "Allow Downgrade" \
       --yesno "${TEXT}" 0 0
   [ $? -ne 0 ] && return 1
-  if [ -z "$(ls /dev/md/*:0 2>/dev/null)" ]; then # SynologyNAS:0, DiskStation:0, SynologyNVR:0, BeeStation:0
-    dialog --backtitle "$(backtitle)" --title "Allow downgrade installation" \
+  DSMROOTS="$(findDSMRoot)"
+  if [ -z "${DSMROOTS}" ]; then
+    dialog --backtitle "$(backtitle)" --title "Allow Downgrade" \
       --msgbox "No DSM system partition(md0) found!\nPlease insert all disks before continuing." 0 0
-    return 1
+    return
   fi
-  while true; do
+  (
     mkdir -p "${TMP_PATH}/mdX"
-    mount "$(ls /dev/md/*:0 2>/dev/null | head -n 1)" "${TMP_PATH}/mdX"
-    [ $? -ne 0 ] && break
-    [ -f "${TMP_PATH}/mdX/etc/VERSION" ] && rm -f "${TMP_PATH}/mdX/etc/VERSION"
-    [ -f "${TMP_PATH}/mdX/etc.defaults/VERSION" ] && rm -f "${TMP_PATH}/mdX/etc.defaults/VERSION"
-    sync
-    umount "${TMP_PATH}/mdX"
+    for I in ${DSMROOTS}; do
+      mount -t ext4 "${I}" "${TMP_PATH}/mdX"
+      [ $? -ne 0 ] && continue
+      [ -f "${TMP_PATH}/mdX/etc/VERSION" ] && rm -f "${TMP_PATH}/mdX/etc/VERSION"
+      [ -f "${TMP_PATH}/mdX/etc.defaults/VERSION" ] && rm -f "${TMP_PATH}/mdX/etc.defaults/VERSION"
+      sync
+      umount "${TMP_PATH}/mdX"
+    done
     rm -rf "${TMP_PATH}/mdX"
-    break
-  done 2>&1 | dialog --backtitle "$(backtitle)" --title "Allow downgrade installation" \
-      --progressbox "Removing ..." 20 70
-  TEXT="Remove VERSION file for all disks completed."
-  dialog --backtitle "$(backtitle)" --colors --aspect 18 \
-    --msgbox "${TEXT}" 0 0
+  ) 2>&1 | dialog --backtitle "$(backtitle)" --title "Allow Downgrade" \
+    --progressbox "Removing ..." 20 70
+  dialog --backtitle "$(backtitle)" --title "Allow Downgrade"  \
+    --msgbox "Allow Downgrade Settings completed." 0 0
   return
 }
 
 ###############################################################################
 # Reset DSM password
 function resetPassword() {
-  if [ -z "$(ls /dev/md/*:0 2>/dev/null)" ]; then # SynologyNAS:0, DiskStation:0, SynologyNVR:0, BeeStation:0
-    dialog --backtitle "$(backtitle)" --colors --title "Reset DSM Password" \
+  DSMROOTS="$(findDSMRoot)"
+  if [ -z "${DSMROOTS}" ]; then
+    dialog --backtitle "$(backtitle)" --title "Reset Password"  \
       --msgbox "No DSM system partition(md0) found!\nPlease insert all disks before continuing." 0 0
     return
   fi
   rm -f "${TMP_PATH}/menu"
-  while true; do
-    mkdir -p "${TMP_PATH}/mdX"
-    mount "$(ls /dev/md/*:0 2>/dev/null | head -n 1)" "${TMP_PATH}/mdX"
-    [ $? -ne 0 ] && break
+  mkdir -p "${TMP_PATH}/mdX"
+  for I in ${DSMROOTS}; do
+    mount -t ext4 "${I}" "${TMP_PATH}/mdX"
+    [ $? -ne 0 ] && continue
     if [ -f "${TMP_PATH}/mdX/etc/shadow" ]; then
       while read L; do
         U=$(echo "${L}" | awk -F ':' '{if ($2 != "*" && $2 != "!!") print $1;}')
@@ -1731,49 +1712,50 @@ function resetPassword() {
       done <<<$(cat "${TMP_PATH}/mdX/etc/shadow" 2>/dev/null)
     fi
     umount "${TMP_PATH}/mdX"
-    rm -rf "${TMP_PATH}/mdX"
-    break
+    [ -f "${TMP_PATH}/menu" ] && break
   done
+  rm -rf "${TMP_PATH}/mdX"
   if [ ! -f "${TMP_PATH}/menu" ]; then
-    dialog --backtitle "$(backtitle)" --colors --title "Reset DSM Password" \
+    dialog --backtitle "$(backtitle)" --title "Reset Password"  \
       --msgbox "All existing users have been disabled. Please try adding new user." 0 0
     return
   fi
-  dialog --backtitle "$(backtitle)" --colors --title "Reset DSM Password" \
-    --no-items --menu "Choose a user name" 0 0 0 --file "${TMP_PATH}/menu" \
+  dialog --backtitle "$(backtitle)" --title "Reset Password"  \
+    --no-items --menu  "Choose a User" 0 0 0 --file "${TMP_PATH}/menu" \
     2>${TMP_PATH}/resp
   [ $? -ne 0 ] && return
   USER="$(cat "${TMP_PATH}/resp" 2>/dev/null | awk '{print $1}')"
   [ -z "${USER}" ] && return
   while true; do
-    dialog --backtitle "$(backtitle)" --colors --title "Reset DSM Password" \
-      --inputbox "Type a new password for user ${USER}" 0 70 "${CMDLINE[${NAME}]}" \
+    dialog --backtitle "$(backtitle)" --title "Reset Password"  \
+      --inputbox "$(printf "Type a new password for user '%s'")" "${USER}" 0 70 "${CMDLINE[${NAME}]}" \
       2>${TMP_PATH}/resp
     [ $? -ne 0 ] && break 2
     VALUE="$(cat "${TMP_PATH}/resp")"
     [ -n "${VALUE}" ] && break
-    dialog --backtitle "$(backtitle)" --colors --title "Reset DSM Password" \
+    dialog --backtitle "$(backtitle)" --title "Reset Password"  \
       --msgbox "Invalid password" 0 0
   done
   NEWPASSWD="$(python -c "from passlib.hash import sha512_crypt;pw=\"${VALUE}\";print(sha512_crypt.using(rounds=5000).hash(pw))")"
-  while true; do
+  (
     mkdir -p "${TMP_PATH}/mdX"
-    mount "$(ls /dev/md/*:0 2>/dev/null | head -n 1)" "${TMP_PATH}/mdX"
-    [ $? -ne 0 ] && break
-    OLDPASSWD="$(cat "${TMP_PATH}/mdX/etc/shadow" 2>/dev/null | grep "^${USER}:" | awk -F ':' '{print $2}')"
-    if [ -n "${NEWPASSWD}" -a -n "${OLDPASSWD}" ]; then
-      sed -i "s|${OLDPASSWD}|${NEWPASSWD}|g" "${TMP_PATH}/mdX/etc/shadow"
-      sed -i "/^${USER}:/ s/\([^:]*\):\([^:]*\):\([^:]*\):\([^:]*\):\([^:]*\):\([^:]*\):\([^:]*\):\([^:]*\):\([^:]*\)/\1:\2:\3:\4:\5:\6:\7::\9/" "${TMP_PATH}/mdX/etc/shadow"
-    fi
-    sed -i "s|status=on|status=off|g" "${TMP_PATH}/mdX/usr/syno/etc/packages/SecureSignIn/preference/${USER}/method.config" 2>/dev/null
-    sync
-    umount "${TMP_PATH}/mdX"
+    for I in ${DSMROOTS}; do
+      mount -t ext4 "${I}" "${TMP_PATH}/mdX"
+      [ $? -ne 0 ] && continue
+      OLDPASSWD="$(cat "${TMP_PATH}/mdX/etc/shadow" 2>/dev/null | grep "^${USER}:" | awk -F ':' '{print $2}')"
+      if [ -n "${NEWPASSWD}" -a -n "${OLDPASSWD}" ]; then
+        sed -i "s|${OLDPASSWD}|${NEWPASSWD}|g" "${TMP_PATH}/mdX/etc/shadow"
+        sed -i "/^${USER}:/ s/\([^:]*\):\([^:]*\):\([^:]*\):\([^:]*\):\([^:]*\):\([^:]*\):\([^:]*\):\([^:]*\):\([^:]*\)/\1:\2:\3:\4:\5:\6:\7::\9/" "${TMP_PATH}/mdX/etc/shadow"
+      fi
+      sed -i "s|status=on|status=off|g" "${TMP_PATH}/mdX/usr/syno/etc/packages/SecureSignIn/preference/${USER}/method.config" 2>/dev/null
+      sync
+      umount "${TMP_PATH}/mdX"
+    done
     rm -rf "${TMP_PATH}/mdX"
-    break
-  done 2>&1 | dialog --backtitle "$(backtitle)" --colors --title "Reset DSM Password" \
+  ) 2>&1 | dialog --backtitle "$(backtitle)" --title "Reset Password"  \
     --progressbox "Resetting ..." 20 100
-  dialog --backtitle "$(backtitle)" --colors --title "Reset DSM Password" \
-    --msgbox "Password reset completed." 0 0
+  dialog --backtitle "$(backtitle)" --title "Reset Password"  \
+    --msgbox "Password Reset completed." 0 0
   return
 }
 
@@ -1820,7 +1802,7 @@ function formatdisks() {
     [[ "${KNAME}" = /dev/md* ]] && continue
     [ -z "${KMODEL}" ] && KMODEL="${TYPE}"
     echo "\"${KNAME}\" \"${KMODEL}\" \"off\"" >>"${TMP_PATH}/opts"
-  done <<<$(lsblk -pno KNAME,MODEL,PKNAME,TYPE)
+  done <<<$(lsblk -pno KNAME,MODEL,PKNAME,TYPE | sort)
   if [ ! -f "${TMP_PATH}/opts" ]; then
     dialog --backtitle "$(backtitle)" --colors --title "Format Disks" \
       --msgbox "No disk found!" 0 0
@@ -1878,34 +1860,36 @@ function package() {
 ###############################################################################
 # let user format disks from inside arc
 function forcessh() {
-  dialog --backtitle "$(backtitle)" --colors --title "Force SSH" \
-    --yesno "Please insert all disks before continuing.\n" 0 0
-  [ $? -ne 0 ] && return
+  DSMROOTS="$(findDSMRoot)"
+  if [ -z "${DSMROOTS}" ]; then
+    dialog --backtitle "$(backtitle)" --title "Force enable SSH"  \
+      --msgbox "No DSM system partition(md0) found!\nPlease insert all disks before continuing." 0 0
+    return
+  fi
   (
     ONBOOTUP=""
     ONBOOTUP="${ONBOOTUP}synowebapi --exec api=SYNO.Core.Terminal method=set version=3 enable_telnet=true enable_ssh=true ssh_port=22 forbid_console=false\n"
-    ONBOOTUP="${ONBOOTUP}echo \"DELETE FROM task WHERE task_name LIKE ''ARCONBOOTUPARC'';\" | sqlite3 /usr/syno/etc/esynoscheduler/esynoscheduler.db\n"
-    while true; do
-      mkdir -p "${TMP_PATH}/mdX"
-      mount "$(ls /dev/md/*:0 2>/dev/null | head -n 1)" "${TMP_PATH}/mdX"
-      [ $? -ne 0 ] && break
+    ONBOOTUP="${ONBOOTUP}echo \"DELETE FROM task WHERE task_name LIKE ''ARCONBOOTUPARC_SSH'';\" | sqlite3 /usr/syno/etc/esynoscheduler/esynoscheduler.db\n"
+    mkdir -p "${TMP_PATH}/mdX"
+    for I in ${DSMROOTS}; do
+      mount -t ext4 "${I}" "${TMP_PATH}/mdX"
+      [ $? -ne 0 ] && continue
       if [ -f "${TMP_PATH}/mdX/usr/syno/etc/esynoscheduler/esynoscheduler.db" ]; then
         sqlite3 ${TMP_PATH}/mdX/usr/syno/etc/esynoscheduler/esynoscheduler.db <<EOF
-DELETE FROM task WHERE task_name LIKE 'ARCONBOOTUPARC';
-INSERT INTO task VALUES('ARCONBOOTUPARC', '', 'bootup', '', 1, 0, 0, 0, '', 0, '$(echo -e ${ONBOOTUP})', 'script', '{}', '', '', '{}', '{}');
+DELETE FROM task WHERE task_name LIKE 'ARCONBOOTUPARC_SSH';
+INSERT INTO task VALUES('ARCONBOOTUPARC_SSH', '', 'bootup', '', 1, 0, 0, 0, '', 0, '$(echo -e ${ONBOOTUP})', 'script', '{}', '', '', '{}', '{}');
 EOF
         sleep 1
         sync
         echo "true" >${TMP_PATH}/isEnable
       fi
       umount "${TMP_PATH}/mdX"
-      rm -rf "${TMP_PATH}/mdX"
-      break
     done
-  ) 2>&1 | dialog --backtitle "$(backtitle)" --colors --title "Force SSH" \
-    --progressbox "Enabling ..." 20 100
-  [ "$(cat ${TMP_PATH}/isEnable 2>/dev/null)" = "true" ] && MSG="Telnet&SSH is enabled." || MSG="Telnet&SSH is not enabled."
-  dialog --backtitle "$(backtitle)" --colors --title "Force SSH" \
+    rm -rf "${TMP_PATH}/mdX"
+  ) 2>&1 | dialog --backtitle "$(backtitle)" --title "Force enable SSH"  \
+    --progressbox "$(TEXT "Enabling ...")" 20 100
+  [ "$(cat ${TMP_PATH}/isEnable 2>/dev/null)" = "true" ] && MSG="Enable Telnet&SSH successfully." || MSG="Enable Telnet&SSH failed."
+  dialog --backtitle "$(backtitle)" --title "Force enable SSH"  \
     --msgbox "${MSG}" 0 0
   return
 }
@@ -1919,7 +1903,7 @@ function cloneLoader() {
     [ -z "${KMODEL}" ] && KMODEL="${TYPE}"
     [[ "${KNAME}" = "${LOADER_DISK}" || "${PKNAME}" = "${LOADER_DISK}" || "${KMODEL}" = "${LOADER_DISK}" ]] && continue
     echo "\"${KNAME}\" \"${KMODEL}\" \"off\"" >>"${TMP_PATH}/opts"
-  done <<<$(lsblk -dpno KNAME,MODEL,PKNAME,TYPE)
+  done <<<$(lsblk -dpno KNAME,MODEL,PKNAME,TYPE | sort)
   if [ ! -f "${TMP_PATH}/opts" ]; then
     dialog --backtitle "$(backtitle)" --colors --title "Clone Loader" \
       --msgbox "No disk found!" 0 0
@@ -2001,8 +1985,8 @@ function resetLoader() {
 # let user edit the grub.cfg
 function editGrubCfg() {
   while true; do
-    dialog --backtitle "$(backtitle)" --colors --title "Edit grub.cfg with caution" \
-      --editbox "${GRUB_PATH}/grub.cfg" 0 0 2>"${TMP_PATH}/usergrub.cfg"
+    dialog --backtitle "$(backtitle)" --title "Edit with caution" \
+      --ok-label "Save" --editbox "${GRUB_PATH}/grub.cfg" 0 0 2>"${TMP_PATH}/usergrub.cfg"
     [ $? -ne 0 ] && return
     mv -f "${TMP_PATH}/usergrub.cfg" "${GRUB_PATH}/grub.cfg"
     break
@@ -2015,12 +1999,14 @@ function editGrubCfg() {
 function greplogs() {
   if [ -d "${PART1_PATH}/logs" ]; then
     rm -f "${TMP_PATH}/log.tar.gz"
-    tar -czf "${PART1_PATH}/log.tar.gz" "${PART1_PATH}" logs
+    rm -f "${PART1_PATH}/log.tar.gz"
+    tar -czf "${PART1_PATH}/log.tar.gz" "${PART1_PATH}/logs"
     if [ -z "${SSH_TTY}" ]; then # web
       mv -f "${PART1_PATH}/log.tar.gz" "/var/www/data/log.tar.gz"
+      chmod 644 "/var/www/data/log.tar.gz"
       URL="http://$(getIP)/log.tar.gz"
       dialog --backtitle "$(backtitle)" --colors --title "Grep Logs" \
-        --msgbox "Please via ${URL} to download the log,\nAnd unzip it and back it up in order by file name." 0 0
+        --msgbox "Please visit ${URL}\nto download the logs and unzip it and back it up in order by file name." 0 0
     else
       sz -be -B 536870912 "${TMP_PATH}/log.tar.gz"
       dialog --backtitle "$(backtitle)" --colors --title "Grep Logs" \
@@ -2031,7 +2017,7 @@ function greplogs() {
     MSG+="\Z1No log found!\Zn\n\n"
     MSG+="Please do as follows:\n"
     MSG+=" 1. Add dbgutils in Addons and rebuild.\n"
-    MSG+=" 2. Normal use.\n"
+    MSG+=" 2. Boot to DSM.\n"
     MSG+=" 3. Reboot to Config Mode and use this Option.\n"
     dialog --backtitle "$(backtitle)" --colors --title "Grep Logs" \
       --msgbox "${MSG}" 0 0
@@ -2047,9 +2033,10 @@ function getbackup() {
     tar -czf "${TMP_PATH}/dsmconfig.tar.gz" -C "${PART1_PATH}" dsmbackup
     if [ -z "${SSH_TTY}" ]; then # web
       mv -f "${TMP_PATH}/dsmconfig.tar.gz" "/var/www/data/dsmconfig.tar.gz"
+      chmod 644 "/var/www/data/dsmconfig.tar.gz"
       URL="http://$(getIP)/dsmconfig.tar.gz"
       dialog --backtitle "$(backtitle)" --colors --title "DSM Config" \
-        --msgbox "Please via ${URL} to download the dsmconfig,\nAnd unzip it and back it up in order by file name." 0 0
+        --msgbox "Please via ${URL}\nto download the dsmconfig and unzip it and back it up in order by file name." 0 0
     else
       sz -be -B 536870912 "${TMP_PATH}/dsmconfig.tar.gz"
       dialog --backtitle "$(backtitle)" --colors --title "DSM Config" \
@@ -2060,10 +2047,30 @@ function getbackup() {
     MSG+="\Z1No dsmbackup found!\Zn\n\n"
     MSG+="Please do as follows:\n"
     MSG+=" 1. Add dsmconfigbackup in Addons and rebuild.\n"
-    MSG+=" 2. Normal use.\n"
+    MSG+=" 2. Boot to DSM.\n"
     MSG+=" 3. Reboot to Config Mode and use this Option.\n"
     dialog --backtitle "$(backtitle)" --colors --title "DSM Config" \
       --msgbox "${MSG}" 0 0
   fi
+  return
+}
+
+###############################################################################
+# SataDOM Menu
+function satadomMenu() {
+  rm -f "${TMP_PATH}/opts"
+  echo "0 \"Create SATA node(ARC)\"" >>"${TMP_PATH}/opts"
+  echo "1 \"Native SATA Disk(SYNO)\"" >>"${TMP_PATH}/opts"
+  echo "2 \"Fake SATA DOM(Redpill)\"" >>"${TMP_PATH}/opts"
+  dialog --backtitle "$(backtitle)" --title "Switch SATA DOM" \
+    --default-item "${SATADOM}" --menu  "Choose an Option" 0 0 0 --file "${TMP_PATH}/opts" \
+    2>${TMP_PATH}/resp
+  [ $? -ne 0 ] && return
+  resp=$(cat ${TMP_PATH}/resp 2>/dev/null)
+  [ -z "${resp}" ] && return
+  SATADOM=${resp}
+  writeConfigKey "satadom" "${SATADOM}" "${USER_CONFIG_FILE}"
+  writeConfigKey "arc.builddone" "false" "${USER_CONFIG_FILE}"
+  BUILDDONE="$(readConfigKey "arc.builddone" "${USER_CONFIG_FILE}")"
   return
 }
